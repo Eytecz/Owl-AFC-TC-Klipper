@@ -5,7 +5,7 @@ export LC_ALL=C
 KLIPPER_PATH="${HOME}/klipper"
 INSTALL_PATH="${1:-${HOME}/klipper-owl-afc-tc}"
 REPO_URL="https://github.com/Eytecz/Owl-AFC-TC-Klipper.git"
-REPO_NAME="Owl-AFC-TC"
+REPO_NAME="Owl-AFC-TC-Klipper"
 
 MOONRAKER_CONF="${HOME}/printer_data/config/moonraker.conf"
 
