@@ -1,10 +1,11 @@
-# PurgeBelt
+# PurgeBelt module for klipper
 #
-# Copyright (C) 2024 Eytecz
+# Copyright (C) 2025 Eytecz
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 import math
+import logging
 
 class PurgeBelt:
     def __init__(self, config):
@@ -50,6 +51,7 @@ class PurgeBelt:
         # Internal state
         self.sync_status = False
         self.purge_belt_stepper = None
+        self.ea_index = None
 
     def handle_ready(self):
         self.min_event_systime = self.reactor.monotonic()
@@ -58,12 +60,12 @@ class PurgeBelt:
         self.toolhead = self.printer.lookup_object('toolhead')
         self.gcode_move = self.printer.lookup_object('gcode_move')
 
-        for manual_extruder_stepper in self.printer.lookup_objects('manual_extruder_stepper'):
-            rail_name = manual_extruder_stepper[1].get_steppers()[0].get_name()
-            if rail_name == 'manual_extruder_stepper purge_belt_stepper':
-                self.purge_belt_stepper = manual_extruder_stepper[1]
+        for manual_stepper in self.printer.lookup_objects('manual_stepper'):
+            rail_name = manual_stepper[1].get_steppers()[0].get_name()
+            if rail_name == 'manual_stepper purge_belt_stepper':
+                self.purge_belt_stepper = manual_stepper[1]
         if self.purge_belt_stepper is None:
-            raise self.printer.config_error("manual_extruder_stepper purge_belt_stepper must be specified")
+            raise self.printer.config_error("manual_stepper purge_belt_stepper must be specified")
     
     # Calculate new purge belt rotation distance when synchronized to the extruder
     def calc_purge_belt_rotation_distance_synced(self, layer_height, extrusion_width):
@@ -84,27 +86,45 @@ class PurgeBelt:
 
     def cmd_UNSYNC_PURGE_BELT(self, gcmd):
         self.unsync_purge_belt()
-
+    
     def sync_purge_belt(self, layer_height, extrusion_width):
         if self.sync_status:
             pass
         else:
-            self.last_purge_belt_position = self.purge_belt_stepper.get_position()[0]
             self.last_purge_belt_rotation_distance = self.purge_belt_stepper.get_steppers()[0].get_rotation_distance()[0]
             rotation_dist = self.calc_purge_belt_rotation_distance_synced(layer_height, extrusion_width)
             self.purge_belt_stepper.get_steppers()[0].set_rotation_distance(rotation_dist)
-            active_extruder_name = self.toolhead.get_extruder().get_name()
-            self.purge_belt_stepper.sync_to_extruder(active_extruder_name)
+            ea = self.get_available_ea_label()
+            self.gcode.run_script_from_command(
+                f'MANUAL_STEPPER STEPPER=purge_belt_stepper GCODE_AXIS={ea}')
+            self.ea_index = self.get_ea_index(ea)
+            logging.info(f'Synchronized purge belt with extruder on axis {ea} with index {self.ea_index}')
             self.sync_status = True
 
     def unsync_purge_belt(self):
         if not self.sync_status:
             pass
         else:
-            self.purge_belt_stepper.sync_to_extruder(None)
-            self.purge_belt_stepper.do_set_position(self.last_purge_belt_position)
+            self.gcode.run_script_from_command(
+                f'MANUAL_STEPPER STEPPER=purge_belt_stepper GCODE_AXIS=')
             self.purge_belt_stepper.get_steppers()[0].set_rotation_distance(self.last_purge_belt_rotation_distance)
             self.sync_status = False
+
+    def get_available_ea_label(self):
+        axis_map = self.gcode_move.axis_map
+        used_axes = set(axis_map.keys())
+        for letter in string.ascii_uppercase:
+            if letter in ("X", "Y", "Z", "E", "F", "N"):
+                continue
+            if letter not in used_axes:
+                return letter
+        raise ValueError("No free axis label found")
+    
+    def get_ea_index(self, ea):
+        ea_index = self.gcode_move.axis_map[f"{ea}"]
+        if ea_index is None:
+            raise ValueError(f"Axis label {ea} is not available")
+        return ea_index
 
     def get_init_toolhead_pos(self):
         init_toolhead_pos = self.toolhead.get_position()
@@ -177,6 +197,7 @@ class PurgeBelt:
             # Do the actual purging
             self.sync_purge_belt(layer_height, extrusion_width)
             self.gcode_move.last_position[3] += purge_length
+            self.gcode_move.last_position[self.ea_index] += purge_length
             self.toolhead.move(self.gcode_move.last_position, extrusion_speed)
             self.toolhead.wait_moves()
             self.unsync_purge_belt()
@@ -203,6 +224,7 @@ class PurgeBelt:
                 # Do the actual purging
                 self.sync_purge_belt(layer_height, extrusion_width)
                 self.gcode_move.last_position[3] += purge_length
+                self.gcode_move.last_position[self.ea_index] += purge_length
                 self.toolhead.move(self.gcode_move.last_position, extrusion_speed)
                 self.toolhead.wait_moves()
                 self.unsync_purge_belt()
