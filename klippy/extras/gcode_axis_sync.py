@@ -56,23 +56,24 @@ class GCodeAxisSync:
         except ValueError as e:
             raise gcmd.error(str(e))
         except Exception as e:
+            logging.exception(f"Exception: {e}")
             raise gcmd.error(f"Failed to process GCODE_AXIS_SYNC command: {str(e)}")
 
 
     def sync_manual_stepper(self, stepper, master_axis_id, absolute=False, limited=False, offset=0.0):
         if isinstance(stepper, tuple) and len(stepper) == 2:
-            stepper_name = stepper[1].get_steppers()[0].get_name()
+            stepper_name = stepper[1].get_steppers()[0].get_name().split()[1]
             stepper_object = stepper[1]
         elif isinstance(stepper, str):
             stepper_name = stepper
             stepper_object = None
             for manual_stepper in self.printer.lookup_objects('manual_stepper'):
-                rail_name = manual_stepper[1].get_steppers()[0].get_name()
+                rail_name = manual_stepper[1].get_steppers()[0].get_name().split()[1]
                 if rail_name == stepper_name:
                     stepper_object = manual_stepper[1]
                     break
             if stepper_object is None:
-                raise Exception(f"Could not find manual_stepper with name {stepper_name}")
+                raise Exception(f"Could not find manual_stepper with name '{stepper_name}'")
         else:
             raise ValueError("Invalid stepper format. Expected tuple or string.")
 
@@ -97,15 +98,15 @@ class GCodeAxisSync:
         if isinstance(stepper, str):
             stepper_name = stepper
         elif isinstance(stepper, tuple) and len(stepper) == 2:
-            stepper_name = stepper[1].get_steppers()[0].get_name()
+            stepper_name = stepper[1].get_steppers()[0].get_name().split()[1]
         else:
             raise ValueError("Invalid stepper format. Expected tuple or string.")
     
         for axis_idx, sync_info in list(self.synced_axes.items()):
-            if sync_info['stepper'].get_steppers()[0].get_name() == stepper_name:
+            if sync_info['stepper'].get_steppers()[0].get_name().split()[1] == stepper_name:
                 del self.synced_axes[axis_idx]
                 self.gcode.run_script_from_command(
-                    f'MANUAL_STEPPER STEPPER={stepper_name} GCODE_AXIS='
+                    f"MANUAL_STEPPER STEPPER='{stepper_name}' GCODE_AXIS="
                 )
                 return
         logging.warning(f"Manual stepper '{stepper_name}' was not synced")
@@ -113,7 +114,7 @@ class GCodeAxisSync:
 
 
     def allocate_axis(self, stepper):
-        stepper_name = stepper[1].get_steppers()[0].get_name()
+        stepper_name = stepper.get_steppers()[0].get_name().split()[1]
         axis_map = self.gcode_move.axis_map
         used_axes = set(axis_map.keys())
         for axis_id in string.ascii_uppercase:
@@ -121,7 +122,7 @@ class GCodeAxisSync:
                 continue
             if axis_id not in used_axes:
                 self.gcode.run_script_from_command(
-                    f'MANUAL_STEPPER STEPPER={stepper_name} GCODE_AXIS={axis_id}'
+                    f"MANUAL_STEPPER STEPPER='{stepper_name}' GCODE_AXIS={axis_id}"
                 )
                 axis_idx = self.gcode_move.axis_map[axis_id]
                 logging.info(f"Allocated axis '{axis_id}' for manual stepper '{stepper_name}'")
@@ -131,7 +132,7 @@ class GCodeAxisSync:
 
     
     def intercept_move(self, newpos, speed):
-        last_pos = self.gcode_move.last_position
+        base_pos = self.gcode_move.base_position
         for axis_idx, sync_info in self.synced_axes.items():
             stepper = sync_info['stepper']
             master_axis_id = sync_info['master_axis_id']
@@ -145,7 +146,7 @@ class GCodeAxisSync:
             if absolute:
                 target = newpos[master_axis_idx] + offset
             else:
-                delta_pos = newpos[master_axis_idx] - last_pos[master_axis_idx]
+                delta_pos = newpos[master_axis_idx] - base_pos[master_axis_idx]
                 target = stepper.get_position()[0] + delta_pos + offset
             newpos[axis_idx] = max(pos_min or target, min(target, pos_max or target))
 
