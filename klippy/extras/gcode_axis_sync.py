@@ -21,8 +21,6 @@ class GCodeAxisSync:
 
         # Register required objects
         self.gcode = self.printer.lookup_object('gcode')
-        self.toolhead = self.printer.lookup_object('toolhead')
-        self.gcode_move = self.printer.lookup_object('gcode_move')
 
         # Register g-code commands
         self.gcode.register_command("GCODE_AXIS_SYNC", self.cmd_GCODE_AXIS_SYNC,
@@ -31,6 +29,8 @@ class GCodeAxisSync:
 
     def handle_connect(self):
         # Intercept self.toolhead.move commands and allow for synchronization later on
+        self.toolhead = self.printer.lookup_object('toolhead')
+        self.gcode_move = self.printer.lookup_object('gcode_move')
         self.original_move = self.toolhead.move
         self.toolhead.move = self.intercept_move
 
