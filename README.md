@@ -13,13 +13,14 @@ wget -O - https://raw.githubusercontent.com/Eytecz/Owl-AFC-TC-Klipper/main/insta
 Then, add the following to your moonraker.conf to enable automatic updates:
 
 ```bash
-[update_manager klipper-owl-afc-tc]
+[update_manager Owl-AFC-TC-Klipper]
 type: git_repo
 channel: dev
-path: ~/klipper-owl-afc-tc
+path: /home/pi/klipper-owl-afc-tc
 origin: https://github.com/Eytecz/Owl-AFC-TC-Klipper.git
 managed_services: klipper
 primary_branch: main
+install_script: install.sh
 ```
 
 Note: If an update has new Klipper files, they will not be automatically installed into Klipper. You will need to run the install script manually:
