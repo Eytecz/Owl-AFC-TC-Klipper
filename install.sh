@@ -65,8 +65,10 @@ function register_update_manager {
 
 [update_manager ${REPO_NAME}]
 type: git_repo
+channel: dev
 path: ${INSTALL_PATH}
 origin: ${REPO_URL}
+managed_services: klipper
 primary_branch: main
 install_script: install.sh
 EOL

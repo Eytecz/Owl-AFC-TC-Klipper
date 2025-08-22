@@ -19,7 +19,7 @@ channel: dev
 path: ~/klipper-owl-afc-tc
 origin: https://github.com/Eytecz/Owl-AFC-TC-Klipper.git
 managed_services: klipper
-primary_branch: main`
+primary_branch: main
 ```
 
 Note: If an update has new Klipper files, they will not be automatically installed into Klipper. You will need to run the install script manually:
