@@ -34,6 +34,10 @@ class GCodeAxisSync:
         self.original_move = self.toolhead.move
         self.toolhead.move = self.intercept_move
 
+    
+    def handle_ready(self):
+        pass
+        
 
     def cmd_GCODE_AXIS_SYNC(self, gcmd):
         stepper = gcmd.get('STEPPER')
