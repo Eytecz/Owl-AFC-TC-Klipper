@@ -148,4 +148,4 @@ class GCodeAxisSync:
         self.original_move(newpos, speed)
 
 def load_config(config):
-return GCodeAxisSync(config)
+    return GCodeAxisSync(config)
