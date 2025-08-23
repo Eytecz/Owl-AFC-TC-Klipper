@@ -185,12 +185,14 @@ class Liftbar:
         pos = [self.position_min, 0., 0., 0.]
         try:
             phoming.manual_home(self.stepper_a, endstop_a, pos, speed, triggered, check_triggered=True)
+            self.toolhead.wait_moves()
         except Exception as e:
             logging.info(f"Exception during homing of stepper a: {e}")
 
         pos2 = [self.position_max - 10, 0., 0., 0.]
         try:
             phoming.manual_home(self.stepper_b, endstop_b, pos2, speed, triggered, check_triggered)
+            self.toolhead.wait_moves()
         except Exception as e:
             logging.info(f"Exception during homing of stepper b: {e}")
 
