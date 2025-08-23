@@ -83,8 +83,8 @@ class GCodeAxisSync:
                 return
 
         axis_id, axis_idx = self.allocate_axis(stepper_object)
-        position_min = stepper_object.position_min if limited else None
-        position_max = stepper_object.position_max if limited else None
+        position_min = stepper_object.pos_min if limited else None
+        position_max = stepper_object.pos_max if limited else None
         self.synced_axes[axis_idx] = {
             'stepper': stepper_object,
             'master_axis_id': master_axis_id,
