@@ -164,11 +164,15 @@ class Liftbar:
 
     def do_enable(self, enable):
         self.stepper_a.do_enable(enable)
+        self.toolhead.wait_moves()
         self.stepper_b.do_enable(enable)
+        self.toolhead.wait_moves() 
     
     def do_set_position(self, setpos):
         self.stepper_a.do_set_position(setpos)
+        self.toolhead.wait_moves()
         self.stepper_b.do_set_position(setpos)
+        self.toolhead.wait_moves()
 
     def do_homing_move(self, movepos, speed, accel, triggered, check_triggered):
         if not self.stepper_a.can_home:
