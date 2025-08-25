@@ -80,23 +80,35 @@ class GCodeAxisSync:
             if stepper_object.pos_max is not None:
                 target = min(stepper_object.pos_max, target)
 
-        # Store only what we need to run later
-        self.presync_queue.append((
-            stepper_object, target, master_axis_id,
-            limited, invert, offset, absolute
-        ))
+        self.presync_queue.append({
+            'stepper': stepper_object,
+            'target': target,
+            'master_axis_id': master_axis_id,
+            'limited': limited,
+            'invert': invert,
+            'offset': offset,
+            'absolute': absolute
+        })
 
     def run_presync_queue(self):
         if not self.presync_queue:
             return
-        self._in_presync = True   # disable intercept during presync moves
+
+        self._in_presync = True
         try:
-            n = len(self.presync_queue)
-            for i, (stepper_object, master_axis_id, target,
-                    limited, invert, offset, absolute) in enumerate(self.presync_queue):
-                sync_flag = 1 if i == n - 1 else 0
+            for i, entry in enumerate(self.presync_queue):
+                stepper_object = entry['stepper']
+                target = entry['target']
+                master_axis_id = entry['master_axis_id']
+                limited = entry['limited']
+                invert = entry['invert']
+                offset = entry['offset']
+                absolute = entry['absolute']
+
+                sync_flag = 1 if i == len(self.presync_queue) - 1 else 0
                 stepper_object.do_move(target, stepper_object.velocity, stepper_object.accel, sync=sync_flag)
                 axis_id, axis_idx = self.allocate_axis(stepper_object)
+
                 position_min = stepper_object.pos_min if limited else None
                 position_max = stepper_object.pos_max if limited else None
                 self.synced_axes[axis_idx] = {
