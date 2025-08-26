@@ -15,7 +15,6 @@ class GCodeAxisSync:
         # Initial state
         self.synced_axes = {}
         self.presync_queue = []
-        self._in_presync = False
 
         # Register handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
@@ -41,9 +40,13 @@ class GCodeAxisSync:
     def cmd_GCODE_AXIS_SYNC(self, gcmd):
         stepper = gcmd.get('STEPPER')
         master_axis_id = gcmd.get('AXIS', None)
+        if master_axis_id is not None:
+            master_axis_id = master_axis_id.upper()
         if master_axis_id == "":
             master_axis_id = None
+
         absolute = bool(gcmd.get_int('ABSOLUTE', 0))
+        presync = bool(gcmd.get_int('PRESYNC', 0))
         limited = bool(gcmd.get_int('LIMITED', 0))
         offset = gcmd.get_float('OFFSET', 0.0)
         invert = bool(gcmd.get_int('INVERT', 0))
@@ -55,10 +58,15 @@ class GCodeAxisSync:
             else:
                 if master_axis_id not in self.gcode_move.axis_map:
                     raise gcmd.error(f"Unknown axis id: {master_axis_id}")
+
                 self.sync_manual_stepper(stepper, master_axis_id,
-                                         absolute=absolute, limited=limited,
-                                         invert=invert, offset=offset)
+                                        absolute=absolute, limited=limited,
+                                        invert=invert, offset=offset)
+                if presync:
+                    self.run_presync_queue()
+
                 gcmd.respond_info(f"Synced manual_stepper '{stepper}' with axis '{master_axis_id}'")
+
         except ValueError as e:
             raise gcmd.error(str(e))
         except Exception as e:
@@ -71,8 +79,8 @@ class GCodeAxisSync:
             raise ValueError(f"Master axis '{master_axis_id}' not found in axis map")
 
         direction = -1.0 if invert else 1.0
-        base_pos = self.gcode_move.base_position
-        target = base_pos[master_axis_idx] * direction + offset
+        last_position = self.gcode_move.last_position
+        target = last_position[master_axis_idx] * direction + offset
 
         if limited:
             if stepper_object.pos_min is not None:
@@ -93,24 +101,26 @@ class GCodeAxisSync:
     def run_presync_queue(self):
         if not self.presync_queue:
             return
-
-        self._in_presync = True
         try:
-            for i, entry in enumerate(self.presync_queue):
+            n = len(self.presync_queue)
+            for i, entry in enumerate(list(self.presync_queue)):
                 stepper_object = entry['stepper']
                 target = entry['target']
+                sync_flag = 1 if i == n - 1 else 0
+                stepper_object.do_move(target, stepper_object.velocity, stepper_object.accel, sync=sync_flag)
+
+            for entry in list(self.presync_queue):
+                stepper_object = entry['stepper']
                 master_axis_id = entry['master_axis_id']
                 limited = entry['limited']
                 invert = entry['invert']
                 offset = entry['offset']
                 absolute = entry['absolute']
 
-                sync_flag = 1 if i == len(self.presync_queue) - 1 else 0
-                stepper_object.do_move(target, stepper_object.velocity, stepper_object.accel, sync=sync_flag)
                 axis_id, axis_idx = self.allocate_axis(stepper_object)
-
                 position_min = stepper_object.pos_min if limited else None
                 position_max = stepper_object.pos_max if limited else None
+
                 self.synced_axes[axis_idx] = {
                     'stepper': stepper_object,
                     'master_axis_id': master_axis_id,
@@ -119,8 +129,8 @@ class GCodeAxisSync:
                     'absolute': absolute,
                     'invert': invert
                 }
+
         finally:
-            self._in_presync = False
             self.presync_queue.clear()
 
     def sync_manual_stepper(self, stepper, master_axis_id, absolute=False, limited=False, invert=False, offset=0.0):
@@ -178,10 +188,7 @@ class GCodeAxisSync:
                         f"MANUAL_STEPPER STEPPER='{stepper_name}' GCODE_AXIS="
                     )
                 except Exception as e:
-                    logging.warning(
-                        f"Manual stepper '{stepper_name}' unsynced, "
-                        f"but axis cleanup failed: {e}"
-                    )
+                    logging.error(f"Error unsyncing manual stepper '{stepper_name}': {e}")
                 return
 
         logging.warning(f"Manual stepper '{stepper_name}' was not synced")
@@ -198,18 +205,22 @@ class GCodeAxisSync:
                     f"MANUAL_STEPPER STEPPER='{stepper_name}' GCODE_AXIS={axis_id}"
                 )
                 axis_idx = self.gcode_move.axis_map[axis_id]
-                logging.info(f"Allocated axis '{axis_id}' for manual stepper '{stepper_name}'")
                 return axis_id, axis_idx
 
         raise ValueError("No available axis found")
 
     def intercept_move(self, newpos, speed):
-        if self._in_presync:
-            self.original_move(newpos, speed)
-            return
-
         if self.presync_queue:
             self.run_presync_queue()
+            
+            newpos_updated_list = self.gcode_move.last_position
+            for i in range(len(newpos)):
+                newpos_updated_list[i] = newpos[i]
+            newpos = newpos_updated_list
+
+        if not self.synced_axes:
+            self.original_move(newpos, speed)
+            return
 
         base_pos = self.gcode_move.base_position
         for axis_idx, sync_info in self.synced_axes.items():
@@ -218,27 +229,18 @@ class GCodeAxisSync:
             pos_min, pos_max = sync_info['axis_limits']
             offset = sync_info['offset']
             absolute = sync_info['absolute']
-            invert = sync_info['invert']
-            direction = -1.0 if invert else 1.0
 
             master_axis_idx = self.gcode_move.axis_map.get(master_axis_id)
             if master_axis_idx is None:
                 raise ValueError(f"Master axis '{master_axis_id}' not found in axis map")
             if absolute:
-                target = newpos[master_axis_idx] * direction + offset
+                target = newpos[master_axis_idx] + offset
             else:
                 delta_pos = newpos[master_axis_idx] - base_pos[master_axis_idx]
-                target = stepper.get_position()[0] + (delta_pos * direction) + offset
-            
-            if pos_min is not None:
-                target = max(pos_min, target)
-            if pos_max is not None:
-                target = min(pos_max, target)
-
-            newpos[axis_idx] = target
+                target = stepper.get_position()[0] + delta_pos + offset
+            newpos[axis_idx] = max(pos_min or target, min(target, pos_max or target))
 
         self.original_move(newpos, speed)
-
 
 def load_config(config):
     return GCodeAxisSync(config)
