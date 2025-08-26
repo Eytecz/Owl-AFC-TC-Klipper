@@ -93,14 +93,7 @@ class Liftbar:
         # Intercept z-axis motions on the toolhead and replace with custom one
         self.toolhead = self.printer.lookup_object('toolhead')
         self.gcode_move = self.printer.lookup_object('gcode_move')
-        self.original_move = self.toolhead.move
-        self.toolhead.move = self.intercept_move
-    
-    def intercept_move(self, newpos, speed):
-        if self.synced and self.homed:
-            self.do_move_safe_tracking(newpos, speed)
-        else:
-            self.original_move(newpos, speed)
+        self.gcode_axis_sync = self.printer.lookup_object('gcode_axis_sync')
         
     def cmd_LIFTBAR(self, gcmd):
         enable = gcmd.get_int('ENABLE', None)
@@ -221,32 +214,20 @@ class Liftbar:
         self.stepper_b.do_move(movepos, speed, accel, sync)
         self.liftbar_pos = movepos
     
-    def do_move_safe_tracking(self, newpos, speed):
-        lbpos = self.calc_position(newpos[2])
-        newpos[4] = lbpos
-        newpos[5] = lbpos
-        self.original_move(newpos, speed)
-        # self.do_move(lbpos, speed, accel, sync)
-    
     def do_sync(self, sync):
         if sync == None:
             self.synced = not self.synced
         else:
             self.synced = sync
         if self.synced == True:
-            zpos = self.toolhead.commanded_pos[2]
-            lbpos = self.calc_position(zpos)
-            self.do_move(lbpos, self.velocity, self.accel, sync=1)
-            self.gcode.run_script_from_command(
-                f'MANUAL_STEPPER STEPPER={self.rail_name_stepper_a.split()[-1]} GCODE_AXIS=A')
-            self.gcode.run_script_from_command(
-                f'MANUAL_STEPPER STEPPER={self.rail_name_stepper_b.split()[-1]} GCODE_AXIS=B')
+            self.gcode_axis_sync.sync_manual_stepper(self.stepper_a, master_axis_id="Z", absolute=True,
+                                        limited=True, invert=False, offset=self.safe_tracking_distance)
+            self.gcode_axis_sync.sync_manual_stepper(self.stepper_b, master_axis_id="Z", absolute=True,
+                                        limited=True, invert=False, offset=self.safe_tracking_distance)
+            self.gcode_axis_sync.run_presync_queue()
         else:
-            self.gcode.run_script_from_command(
-                f'MANUAL_STEPPER STEPPER={self.rail_name_stepper_a.split()[-1]} GCODE_AXIS=')
-            self.gcode.run_script_from_command(
-                f'MANUAL_STEPPER STEPPER={self.rail_name_stepper_b.split()[-1]} GCODE_AXIS=')
-
+            self.gcode_axis_sync.unsync_manual_stepper(self.stepper_a)
+            self.gcode_axis_sync.unsync_manual_stepper(self.stepper_b)
     
     def do_tool_dropoff(self, dock):        
         # Unsync liftbar to allow independent motion
@@ -367,14 +348,6 @@ class Liftbar:
 
     def get_position(self):
         return self.stepper_a.get_position()
- 
-    def calc_position(self, movepos):
-        safe_track_pos = movepos + self.safe_tracking_distance
-        if safe_track_pos < self.position_min:
-            return self.position_min
-        elif safe_track_pos > self.position_max:
-            return self.position_max
-        return safe_track_pos
 
     def _parse_pos(self, value):
         try:
