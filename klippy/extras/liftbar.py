@@ -220,14 +220,14 @@ class Liftbar:
         else:
             self.synced = sync
         if self.synced == True:
-            self.gcode_axis_sync.sync_manual_stepper(self.stepper_a, master_axis_id="Z", absolute=True,
+            self.gcode_axis_sync.sync_manual_stepper(self.rail_name_stepper_a, master_axis_id="Z", absolute=True,
                                         limited=True, invert=False, offset=self.safe_tracking_distance)
-            self.gcode_axis_sync.sync_manual_stepper(self.stepper_b, master_axis_id="Z", absolute=True,
+            self.gcode_axis_sync.sync_manual_stepper(self.rail_name_stepper_b, master_axis_id="Z", absolute=True,
                                         limited=True, invert=False, offset=self.safe_tracking_distance)
             self.gcode_axis_sync.run_presync_queue()
         else:
-            self.gcode_axis_sync.unsync_manual_stepper(self.stepper_a)
-            self.gcode_axis_sync.unsync_manual_stepper(self.stepper_b)
+            self.gcode_axis_sync.unsync_manual_stepper(self.rail_name_stepper_a)
+            self.gcode_axis_sync.unsync_manual_stepper(self.rail_name_stepper_b)
     
     def do_tool_dropoff(self, dock):        
         # Unsync liftbar to allow independent motion
