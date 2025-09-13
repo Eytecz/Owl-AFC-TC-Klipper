@@ -356,7 +356,7 @@ class Liftbar:
         except ValueError:
             raise ValueError(f"Invalid position format for {value}. Expected format 'x, y'.")
 
-    def _stepper_status(self, gcmd):
+    def _stepper_status(self):
         stepper_enable = self.printer.lookup_object('stepper_enable')
         steppers  = [self.rail_name_stepper_a, self.rail_name_stepper_b]
         for s in steppers:
