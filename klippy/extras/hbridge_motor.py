@@ -41,7 +41,7 @@ class HBridgeMotor:
             pin = ppins.setup_pin('pwm', pin_name)
             pin.setup_max_duration(0.)
             pin.setup_cycle_time(cycle_time, hardware_pwm)
-            pin.setup_start_value(0.)
+            pin.setup_start_value(0., 0.)
             setattr(self, attr, pin)
         
         self.enable_pin = ppins.setup_pin('digital_out', config.get('enable_pin'))
