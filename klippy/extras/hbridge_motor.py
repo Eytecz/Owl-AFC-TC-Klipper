@@ -64,7 +64,7 @@ class HBridgeMotor:
     def handle_connect(self):
         pass
 
-    def handle_restart(self):
+    def handle_restart(self, print_time):
         pass
     
     def _apply_speed(self, print_time, value):
