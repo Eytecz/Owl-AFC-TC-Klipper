@@ -50,7 +50,7 @@ class HBridgeMotor:
 
         # Create g-code request queue
         self.gcrq = output_pin.GCodeRequestQueue(config, self.in1_pin.get_mcu(),
-                                                 self._apply_speed())
+                                                 self._apply_speed)
 
         # Register g-code commands
         self.cmd_SET_DRV_MOTOR_help = "Set the speed of the H-Bridge motor. Usage: SET_DRV_MOTOR <value> "
