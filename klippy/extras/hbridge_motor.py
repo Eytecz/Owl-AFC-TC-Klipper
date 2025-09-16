@@ -19,7 +19,7 @@ class HBridgeMotor:
         # Register handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
         self.printer.register_event_handler("klippy:connect", self.handle_connect)
-        self.pirnter.register_event_handler("gcode:request_restart", self.handle_restart)
+        self.printer.register_event_handler("gcode:request_restart", self.handle_restart)
 
         # Register required objects
         self.gcode = self.printer.lookup_object('gcode')
