@@ -36,20 +36,11 @@ class HBridgeMotor:
 
         # Setup pin objects
         ppins = self.printer.lookup_object('pins')
-        self.in1_pin = ppins.setup_pin('pwm', config.get('in1_pin'))
-        self.in1_pin.setup_max_duration(0.)
-        self.in1_pin.setup_max_duration(cycle_time, hardware_pwm)
-        self.in1_pin.setup_start_value(0.)
-        self.in2_pin = ppins.setup_pin('pwm', config.get('in2_pin'))
-        self.in2_pin.setup_max_duration(0.)
-        self.in2_pin.setup_max_duration(cycle_time, hardware_pwm)
-        self.in2_pin.setup_start_value(0.)
-
         for attr, pin_name in (('in1_pin', config.get('in1_pin')),
                                ('in2_pin', config.get('in2_pin'))):
             pin = ppins.setup_pin('pwm', pin_name)
             pin.setup_max_duration(0.)
-            pin.setup_max_duration(cycle_time, hardware_pwm)
+            pin.setup_cycle_time(cycle_time, hardware_pwm)
             pin.setup_start_value(0.)
             setattr(self, attr, pin)
         
