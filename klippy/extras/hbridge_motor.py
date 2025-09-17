@@ -40,7 +40,9 @@ class HBridgeMotor:
                     ('in2_pin', config.get('in2_pin'))]
 
         if dir_invert:
+            logging.info(f"pin_pairs: {pin_pairs}")
             pin_pairs.reverse()   # swap order if inverted
+            logging.info(f"pin_pairs inverted: {pin_pairs}")
 
         for attr, pin_name in pin_pairs:
             pin = ppins.setup_pin('pwm', pin_name)
@@ -48,7 +50,7 @@ class HBridgeMotor:
             pin.setup_cycle_time(cycle_time, hardware_pwm)
             pin.setup_start_value(0., 0.)
             setattr(self, attr, pin)
-            
+
         self.enable_pin = ppins.setup_pin('digital_out', config.get('enable_pin'))
         self.enable_pin.setup_max_duration(0.)
 
