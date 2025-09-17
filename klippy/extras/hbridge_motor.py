@@ -36,14 +36,19 @@ class HBridgeMotor:
 
         # Setup pin objects
         ppins = self.printer.lookup_object('pins')
-        for attr, pin_name in (('in1_pin', config.get('in1_pin')),
-                               ('in2_pin', config.get('in2_pin'))):
+        pin_pairs = [('in1_pin', config.get('in1_pin')),
+                    ('in2_pin', config.get('in2_pin'))]
+
+        if dir_invert:
+            pin_pairs.reverse()   # swap order if inverted
+
+        for attr, pin_name in pin_pairs:
             pin = ppins.setup_pin('pwm', pin_name)
             pin.setup_max_duration(0.)
             pin.setup_cycle_time(cycle_time, hardware_pwm)
             pin.setup_start_value(0., 0.)
             setattr(self, attr, pin)
-        
+            
         self.enable_pin = ppins.setup_pin('digital_out', config.get('enable_pin'))
         self.enable_pin.setup_max_duration(0.)
 
