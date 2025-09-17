@@ -126,7 +126,7 @@ class HBridgeMotor:
         self.gcrq.queue_gcode_request(value)
 
     def cmd_SET_DRV_MOTOR(self, gcmd):
-        value = gcmd.get_float('VALUE', 0., minval=0., maxval=1.)
+        value = gcmd.get_float('VALUE', 0., minval=-1., maxval=1.)
         self.set_speed_from_command(value)
 
 
