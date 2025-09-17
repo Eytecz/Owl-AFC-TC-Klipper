@@ -101,24 +101,24 @@ class HBridgeMotor:
             self.last_value_in2 = 0.0 if value > 0 else kick_val
             if value > 0:   # Forward kick
                 self.in1_pin.set_pwm(print_time, self.max_power)
-                self.in2_pin.set_digital(print_time, 0)
+                self.in2_pin.set_pwm(print_time, 0)
             else:           # Reverse kick
-                self.in1_pin.set_digital(print_time, 0)
+                self.in1_pin.set_pwm(print_time, 0)
                 self.in2_pin.set_pwm(print_time, self.max_power)
             return "delay", self.kick_start_time
 
         # Normal operation
         if value > 0.:   # Forward
             self.in1_pin.set_pwm(print_time, value)
-            self.in2_pin.set_digital(print_time, 0)
+            self.in2_pin.set_pwm(print_time, 0)
             self.last_value_in1, self.last_value_in2 = value, 0.0
         elif value < 0.: # Reverse
-            self.in1_pin.set_digital(print_time, 0)
+            self.in1_pin.set_pwm(print_time, 0)
             self.in2_pin.set_pwm(print_time, -value)
             self.last_value_in1, self.last_value_in2 = 0.0, -value
         else:            # Coast (or Brake if enabled)
-            self.in1_pin.set_digital(print_time, 0)
-            self.in2_pin.set_digital(print_time, 0)
+            self.in1_pin.set_pwm(print_time, 0)
+            self.in2_pin.set_pwm(print_time, 0)
             self.last_value_in1, self.last_value_in2 = 0.0, 0.0
 
     
