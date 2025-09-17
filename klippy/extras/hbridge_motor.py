@@ -74,55 +74,79 @@ class HBridgeMotor:
         pass
     
     def _apply_speed(self, print_time, value):
-        # Value is in range [-1.0, 1.0]
+        # Apply off threshold
         if abs(value) < self.off_below:
-            value = 0.
+            value = 0.0
 
         # Clamp
         value = max(-self.max_power, min(self.max_power, value))
 
-        # Avoid redundant updates
-        if value == getattr(self, 'last_req_value_in1', None):
-            return "discard", 0.
+        # Track previous requested value
+        last_req = getattr(self, 'last_req_value_in1', 0.0)
 
-        # Enable pin
-        if self.enable_pin:
-            if value != 0. and (getattr(self, 'last_req_value_in1', 0.) == 0.):
+        # Enable pin handling
+        if getattr(self, 'enable_pin', None):
+            if value != 0.0 and last_req == 0.0:
                 self.enable_pin.set_digital(print_time, 1)
-            elif value == 0. and getattr(self, 'last_req_value_in1', 0.) != 0.:
+            elif value == 0.0 and last_req != 0.0:
                 self.enable_pin.set_digital(print_time, 0)
 
-        # Kick-start logic
-        do_kick = (value and self.kick_start_time
-                and (abs(value) - abs(getattr(self, 'last_req_value_in1', 0.)) > 0.5))
+        # --- Kick-start logic ---
+        # Only trigger if moving from stop or large change
+        do_kick = (value != 0.0
+                and self.kick_start_time > 0
+                and (last_req == 0.0 or abs(value) - abs(last_req) > 0.5))
         if do_kick:
             self.last_req_value_in1 = value
-            kick_val = self.max_power if value > 0 else -self.max_power
-            self.last_value_in1 = kick_val
-            self.last_value_in2 = 0.0 if value > 0 else kick_val
-            if value > 0:   # Forward
+            kick_pwm = self.max_power if value > 0 else -self.max_power
+
+            # Forward kick
+            if value > 0:
                 self.in1_pin.set_pwm(print_time, self.max_power)
                 self.in2_pin.set_pwm(print_time, 0)
-            else:           # Reverse
+            else:  # Reverse kick
                 self.in1_pin.set_pwm(print_time, 0)
                 self.in2_pin.set_pwm(print_time, self.max_power)
+
+            # Update last applied values
+            self.last_value_in1 = kick_pwm if value > 0 else 0.0
+            self.last_value_in2 = kick_pwm if value < 0 else 0.0
+
             return "delay", self.kick_start_time
 
-        # Normal operation
+        # --- Normal operation ---
         self.last_req_value_in1 = value
-        if value > 0.:   # Forward
+
+        if value > 0.0:  # Forward
             self.in1_pin.set_pwm(print_time, value)
             self.in2_pin.set_pwm(print_time, 0)
             self.last_value_in1, self.last_value_in2 = value, 0.0
-        elif value < 0.: # Reverse
+
+        elif value < 0.0:  # Reverse
             self.in1_pin.set_pwm(print_time, 0)
             self.in2_pin.set_pwm(print_time, -value)
             self.last_value_in1, self.last_value_in2 = 0.0, -value
-        else:            # Coast / Brake
-            self.in1_pin.set_pwm(print_time, 0)
-            self.in2_pin.set_pwm(print_time, 0)
-            self.last_value_in1, self.last_value_in2 = 0.0, 0.0
 
+        else:  # Zero: optionally apply short brake
+            if getattr(self, 'brake_time', 0.0) > 0.0 and (self.last_value_in1 != 0.0 or self.last_value_in2 != 0.0):
+                # Apply brake pulse: both outputs high for brake_time
+                self.in1_pin.set_pwm(print_time, self.max_power)
+                self.in2_pin.set_pwm(print_time, self.max_power)
+                self.last_value_in1 = self.max_power
+                self.last_value_in2 = self.max_power
+                # After brake_time, go to coast
+                def end_brake():
+                    self.in1_pin.set_pwm(print_time, 0)
+                    self.in2_pin.set_pwm(print_time, 0)
+                    self.last_value_in1 = 0.0
+                    self.last_value_in2 = 0.0
+                self.reactor.register_timer(self.brake_time, end_brake)
+                return "delay", self.brake_time
+            else:
+                # Coast immediately
+                self.in1_pin.set_pwm(print_time, 0)
+                self.in2_pin.set_pwm(print_time, 0)
+                self.last_value_in1, self.last_value_in2 = 0.0, 0.0
 
     
     def set_speed_from_command(self, value):
