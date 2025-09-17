@@ -30,6 +30,7 @@ class HBridgeMotor:
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
         self.kick_start_time = config.getfloat('kick_start_time', 0.1, minval=0.)
         self.off_below = config.getfloat('off_below', 0., minval=0., maxval=1.)
+        self.brake_time = config.getfloat('brake_time', 10., minval=0.)
         cycle_time = config.getfloat('cycle_time', 0.1, minval=0.01)
         hardware_pwm = config.getboolean('hardware_pwm', False)
         dir_invert = config.getboolean('dir_invert', False)
@@ -86,9 +87,11 @@ class HBridgeMotor:
 
         # Enable pin handling
         if getattr(self, 'enable_pin', None):
-            if value != 0.0 and last_req == 0.0:
+            # Keep enabled if value != 0 or braking
+            is_braking = (value == 0.0 and (self.last_value_in1 != 0.0 or self.last_value_in2 != 0.0) and self.brake_time > 0.0)
+            if value != 0.0 or is_braking:
                 self.enable_pin.set_digital(print_time, 1)
-            elif value == 0.0 and last_req != 0.0:
+            else:
                 self.enable_pin.set_digital(print_time, 0)
 
         # --- Kick-start logic ---
@@ -119,34 +122,43 @@ class HBridgeMotor:
 
         if value > 0.0:  # Forward
             self.in1_pin.set_pwm(print_time, value)
-            self.in2_pin.set_pwm(print_time, 0)
+            self.in2_pin.set_pwm(print_time, 0.)
             self.last_value_in1, self.last_value_in2 = value, 0.0
 
         elif value < 0.0:  # Reverse
-            self.in1_pin.set_pwm(print_time, 0)
+            self.in1_pin.set_pwm(print_time, 0.)
             self.in2_pin.set_pwm(print_time, -value)
             self.last_value_in1, self.last_value_in2 = 0.0, -value
 
         else:  # Zero: optionally apply short brake
-            if getattr(self, 'brake_time', 0.0) > 0.0 and (self.last_value_in1 != 0.0 or self.last_value_in2 != 0.0):
-                # Apply brake pulse: both outputs high for brake_time
+            if getattr(self, 'brake_time', 20.0) > 0.0 and (self.last_value_in1 != 0.0 or self.last_value_in2 != 0.0):
+                # Apply brake pulse: both outputs high
                 self.in1_pin.set_pwm(print_time, self.max_power)
                 self.in2_pin.set_pwm(print_time, self.max_power)
                 self.last_value_in1 = self.max_power
                 self.last_value_in2 = self.max_power
-                # After brake_time, go to coast
-                def end_brake():
-                    self.in1_pin.set_pwm(print_time, 0)
-                    self.in2_pin.set_pwm(print_time, 0)
+                logging.info("HBridgeMotor: Applying brake for %.3f sec" % self.brake_time)
+
+                # Schedule timer safely
+                def end_brake(eventtime):
+                    self.in1_pin.set_pwm(eventtime, 0.0)
+                    self.in2_pin.set_pwm(eventtime, 0.0)
                     self.last_value_in1 = 0.0
                     self.last_value_in2 = 0.0
-                self.reactor.register_timer(self.brake_time, end_brake)
+                    logging.info("HBridgeMotor: Brake ended, coasting")
+                    return self.reactor.NEVER
+
+                min_timer_interval = 0.001  # 1ms minimum to avoid "timer too close"
+                waketime = max(self.reactor.monotonic() + self.brake_time,
+                            self.reactor.monotonic() + min_timer_interval)
+                self.reactor.register_timer(end_brake, waketime)
                 return "delay", self.brake_time
             else:
                 # Coast immediately
-                self.in1_pin.set_pwm(print_time, 0)
-                self.in2_pin.set_pwm(print_time, 0)
+                self.in1_pin.set_pwm(print_time, 0.0)
+                self.in2_pin.set_pwm(print_time, 0.0)
                 self.last_value_in1, self.last_value_in2 = 0.0, 0.0
+
 
     
     def set_speed_from_command(self, value):
