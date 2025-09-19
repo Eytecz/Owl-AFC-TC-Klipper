@@ -16,6 +16,7 @@ class HBridgeMotor:
         # Initial state
         self.last_value_in1 = self.last_value_in2 = 0.
         self.last_pwm_value = 0.
+        self.req_pwm_value = 0.
 
 
         # Register handlers
@@ -63,6 +64,10 @@ class HBridgeMotor:
 
         self.drvq = output_pin.GCodeRequestQueue(config, self.in1_pin.get_mcu(),
                                                 self.set_drv_mode)
+
+        self.motion_request = output_pin.GCodeRequestQueue(config, self.in1_pin.get_mcu(),
+                                                self.execute_controlled_drive)
+
 
         # Register g-code commands
         self.cmd_SET_DRV_MOTOR_help = "Set the speed of the H-Bridge motor. Usage: SET_DRV_MOTOR VALUE=<value>"
@@ -175,14 +180,46 @@ class HBridgeMotor:
         except Exception as e:
             logging.error("HBridgeMotor: Error applying speed: %s" % str(e))
 
+
+    def execute_controlled_drive(self, print_time, pwm_value):
+        logging.info("HBridgeMotor: Requested controlled drive with PWM %.3f" % pwm_value)
+        logging.info("HBridgeMotor: Last PWM value was %.3f" % self.last_pwm_value)
+        if abs(pwm_value) < self.off_below:
+            pwm_value = 0.0
+
+        if pwm_value == self.last_pwm_value:
+           return        
+        
+        # Kick-start
+        if self.kick_start_time > 0 and pwm_value != 0.0:
+            kick_required = (
+                self.last_pwm_value == 0.0 or                                   # Starting from stop
+                pwm_value * self.last_pwm_value < 0 or                          # Changing direction
+                (abs(pwm_value) > abs(self.last_pwm_value)                      # Increasing speed
+                    and abs(abs(pwm_value) - abs(self.last_pwm_value)) > 0.2)
+            )
+            if kick_required:
+                mode = 'forward' if pwm_value > 0 else 'reverse'
+                self.set_drv_mode(print_time, mode, self.max_power)
+                return "delay", self.kick_start_time
+        
+        # Normal forward/reverse
+        mode = 'forward' if pwm_value > 0 else 'reverse' if pwm_value < 0 else 'coast'
+        self.set_drv_mode(print_time, mode, abs(pwm_value))
+
     
     def set_drv_mode(self, print_time, mode, pwm_value):
+        valid_modes = {"sleep", "forward", "reverse", "brake", "coast"}
+        if mode not in valid_modes:
+            raise ValueError(f"Invalid driver mode: {mode}")
+
         pwm_value = max(0., min(self.max_power, pwm_value))
     
         if mode == 'sleep':
             self.enable_pin.set_digital(print_time, 0)
             self.in1_pin.set_pwm(print_time, 0.0)
             self.in2_pin.set_pwm(print_time, 0.0)
+            self.last_pwm_value = 0.0
             logging.info("HBridgeMotor: Driver set to sleep mode")
             return
         
@@ -191,25 +228,26 @@ class HBridgeMotor:
         if mode == 'forward':
             self.in1_pin.set_pwm(print_time, pwm_value)
             self.in2_pin.set_pwm(print_time, 0.0)
+            self.last_pwm_value = pwm_value
             logging.info("HBridgeMotor: Driver set to forward mode with PWM %.3f" % pwm_value)
         
         elif mode == 'reverse':
             self.in1_pin.set_pwm(print_time, 0.0)
             self.in2_pin.set_pwm(print_time, pwm_value)
+            self.last_pwm_value = -pwm_value
             logging.info("HBridgeMotor: Driver set to reverse mode with PWM %.3f" % pwm_value)
 
         elif mode == 'brake':
             self.in1_pin.set_pwm(print_time, 1.0)
             self.in2_pin.set_pwm(print_time, 1.0)
+            self.last_pwm_value = 0.0
             logging.info("HBridgeMotor: Driver set to brake mode")
         
         elif mode == 'coast':
             self.in1_pin.set_pwm(print_time, 0.0)
             self.in2_pin.set_pwm(print_time, 0.0)
+            self.last_pwm_value = 0.0
             logging.info("HBridgeMotor: Driver set to coast mode")
-        
-        else:
-            raise ValueError("Invalid driver mode: %s" % mode)
 
     
     def cmd_SET_DRV_MODE(self, gcmd):
@@ -220,14 +258,10 @@ class HBridgeMotor:
         except Exception as e:
             gcmd.error("HBridgeMotor: Error setting driver mode: %s" % str(e))
 
-
-    def set_speed_from_command(self, value):
-        self.gcrq.queue_gcode_request(value)
-
     
     def cmd_SET_DRV_MOTOR(self, gcmd):
         value = gcmd.get_float('VALUE', 0., minval=-1., maxval=1.)
-        self.set_speed_from_command(value)
+        self.motion_request.queue_gcode_request(value)
 
 
 def load_config_prefix(config):
