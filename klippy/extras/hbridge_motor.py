@@ -73,7 +73,7 @@ class HBridgeMotor:
         pass
 
     def handle_restart(self, print_time):
-        pass
+        self.set_drv_mode(print_time, 'sleep')
     
     def execute_controlled_drive(self, print_time, pwm_value):
         logging.info("HBridgeMotor: Requested controlled drive with PWM %.3f" % pwm_value)
@@ -101,11 +101,10 @@ class HBridgeMotor:
         if self.brake_time > 0 and self.last_pwm_value != 0.0 and pwm_value == 0.0:
             self.set_drv_mode(print_time, 'brake')
             return "delay", self.brake_time
-        
-        # Normal forward/reverse/coast
-        mode = 'forward' if pwm_value > 0 else 'reverse' if pwm_value < 0 else 'coast'
-        self.set_drv_mode(print_time, mode, abs(pwm_value))
 
+        # Normal forward/reverse/sleep
+        mode = 'forward' if pwm_value > 0 else 'reverse' if pwm_value < 0 else 'sleep'
+        self.set_drv_mode(print_time, mode, abs(pwm_value))
     
     def set_drv_mode(self, print_time, mode, pwm_value=0.0):
         valid_modes = {"sleep", "forward", "reverse", "brake", "coast"}
@@ -148,10 +147,20 @@ class HBridgeMotor:
             self.last_pwm_value = 0.0
             logging.info("HBridgeMotor: Driver set to coast mode")
 
+    def motion_command(self, pwm_value, runtime=None):
+        self.motion_request.queue_gcode_request(pwm_value)
+        if runtime is not None:
+            def end_motion(eventtime):
+                self.motion_request.queue_gcode_request(0.0)
+                return self.reactor.NEVER
+            waketime = self.reactor.monotonic() + runtime
+            self.reactor.register_timer(end_motion, waketime)
+
    
     def cmd_SET_DRV_MOTOR(self, gcmd):
         value = gcmd.get_float('VALUE', 0., minval=-1., maxval=1.)
-        self.motion_request.queue_gcode_request(value)
+        runtime = gcmd.get_float('RUNTIME', None, minval=0.)
+        self.motion_command(value, runtime)
 
 
 def load_config_prefix(config):
