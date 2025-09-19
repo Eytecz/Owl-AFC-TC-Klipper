@@ -76,8 +76,6 @@ class HBridgeMotor:
         self.motion_request.queue_gcode_request(0.0)
     
     def execute_controlled_drive(self, print_time, pwm_value):
-        logging.info("HBridgeMotor: Requested controlled drive with PWM %.3f" % pwm_value)
-        logging.info("HBridgeMotor: Last PWM value was %.3f" % self.last_pwm_value)
         if abs(pwm_value) < self.off_below:
             pwm_value = 0.0
 
@@ -118,7 +116,6 @@ class HBridgeMotor:
             self.in1_pin.set_pwm(print_time, 0.0)
             self.in2_pin.set_pwm(print_time, 0.0)
             self.last_pwm_value = 0.0
-            logging.info("HBridgeMotor: Driver set to sleep mode")
             return
         
         self.enable_pin.set_digital(print_time, 1)
@@ -127,25 +124,21 @@ class HBridgeMotor:
             self.in1_pin.set_pwm(print_time, pwm_value)
             self.in2_pin.set_pwm(print_time, 0.0)
             self.last_pwm_value = pwm_value
-            logging.info("HBridgeMotor: Driver set to forward mode with PWM %.3f" % pwm_value)
         
         elif mode == 'reverse':
             self.in1_pin.set_pwm(print_time, 0.0)
             self.in2_pin.set_pwm(print_time, pwm_value)
             self.last_pwm_value = -pwm_value
-            logging.info("HBridgeMotor: Driver set to reverse mode with PWM %.3f" % pwm_value)
 
         elif mode == 'brake':
             self.in1_pin.set_pwm(print_time, 1.0)
             self.in2_pin.set_pwm(print_time, 1.0)
             self.last_pwm_value = 0.0
-            logging.info("HBridgeMotor: Driver set to brake mode")
         
         elif mode == 'coast':
             self.in1_pin.set_pwm(print_time, 0.0)
             self.in2_pin.set_pwm(print_time, 0.0)
             self.last_pwm_value = 0.0
-            logging.info("HBridgeMotor: Driver set to coast mode")
 
     def scheduled_motion(self, pwm_value, runtime=None, print_time=None):
         def start_motion(eventtime):
