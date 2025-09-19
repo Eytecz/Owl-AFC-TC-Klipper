@@ -73,7 +73,7 @@ class HBridgeMotor:
         pass
 
     def handle_restart(self, print_time):
-        self.set_drv_mode(print_time, 'sleep')
+        self.motion_request.queue_gcode_request(0.0)
     
     def execute_controlled_drive(self, print_time, pwm_value):
         logging.info("HBridgeMotor: Requested controlled drive with PWM %.3f" % pwm_value)
@@ -147,21 +147,29 @@ class HBridgeMotor:
             self.last_pwm_value = 0.0
             logging.info("HBridgeMotor: Driver set to coast mode")
 
-    def motion_command(self, pwm_value, runtime=None):
-        self.motion_request.queue_gcode_request(pwm_value)
-        if runtime is not None:
-            def end_motion(eventtime):
-                self.motion_request.queue_gcode_request(0.0)
-                return self.reactor.NEVER
-            waketime = self.reactor.monotonic() + runtime
-            self.reactor.register_timer(end_motion, waketime)
+    def scheduled_motion(self, pwm_value, runtime=None, print_time=None):
+        def start_motion(eventtime):
+            self.motion_request.queue_gcode_request(pwm_value)
+            if runtime is not None:
+                def end_motion(eventtime):
+                    self.motion_request.queue_gcode_request(0.0)
+                    return self.reactor.NEVER
+                stop_time = self.reactor.monotonic() + runtime
+                self.reactor.register_timer(end_motion, stop_time)
+            return self.reactor.NEVER
 
-   
+        if print_time is None:
+            start_motion(self.reactor.monotonic())
+        else:
+            self.reactor.register_timer(start_motion, print_time)
+    
     def cmd_SET_DRV_MOTOR(self, gcmd):
         value = gcmd.get_float('VALUE', 0., minval=-1., maxval=1.)
         runtime = gcmd.get_float('RUNTIME', None, minval=0.)
-        self.motion_command(value, runtime)
-
+        delay = gcmd.get_float('DELAY', None)
+        print_time = None if delay is None else self.reactor.monotonic() + delay
+        self.scheduled_motion(value, runtime, print_time)
+  
 
 def load_config_prefix(config):
     return HBridgeMotor(config)
