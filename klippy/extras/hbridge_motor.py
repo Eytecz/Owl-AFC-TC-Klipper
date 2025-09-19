@@ -15,6 +15,8 @@ class HBridgeMotor:
 
         # Initial state
         self.last_value_in1 = self.last_value_in2 = 0.
+        self.last_pwm_value = 0.
+
 
         # Register handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
@@ -29,8 +31,8 @@ class HBridgeMotor:
         self.name = config.get_name().split()[1]
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
         self.kick_start_time = config.getfloat('kick_start_time', 0.1, minval=0.)
+        self.brake_time = config.getfloat('brake_time', 1.0, minval=0.)
         self.off_below = config.getfloat('off_below', 0., minval=0., maxval=1.)
-        self.brake_time = config.getfloat('brake_time', 10., minval=0.)
         cycle_time = config.getfloat('cycle_time', 0.1, minval=0.01)
         hardware_pwm = config.getboolean('hardware_pwm', False)
         dir_invert = config.getboolean('dir_invert', False)
@@ -56,13 +58,21 @@ class HBridgeMotor:
         # Create g-code request queue
         if self.in1_pin.get_mcu() != self.in2_pin.get_mcu():
             raise config.error("in1_pin and in2_pin must be on the same MCU")
-        self.gcrq = output_pin.GCodeRequestQueue(config, self.in1_pin.get_mcu(),
-                                                 self._apply_speed)
+        # self.gcrq = output_pin.GCodeRequestQueue(config, self.in1_pin.get_mcu(),
+        #                                          self._apply_speed)
+
+        self.drvq = output_pin.GCodeRequestQueue(config, self.in1_pin.get_mcu(),
+                                                self.set_drv_mode)
 
         # Register g-code commands
-        self.cmd_SET_DRV_MOTOR_help = "Set the speed of the H-Bridge motor. Usage: SET_DRV_MOTOR <value> "
+        self.cmd_SET_DRV_MOTOR_help = "Set the speed of the H-Bridge motor. Usage: SET_DRV_MOTOR VALUE=<value>"
         self.gcode.register_mux_command('SET_DRV_MOTOR', 'MOTOR', self.name,
                                         self.cmd_SET_DRV_MOTOR, desc=self.cmd_SET_DRV_MOTOR_help)
+
+        self.cmd_SET_DRV_MODE_help = "Set the mode of the H-Bridge motor driver. Usage: SET_DRV_MODE MODE=<mode> VALUE=<pwm_value>"
+        self.gcode.register_mux_command('SET_DRV_MODE', 'MOTOR', self.name,
+                                        self.cmd_SET_DRV_MODE, desc=self.cmd_SET_DRV_MODE_help)
+        
     
     
     def handle_ready(self):
@@ -75,95 +85,146 @@ class HBridgeMotor:
         pass
     
     def _apply_speed(self, print_time, value):
-        # Apply off threshold
-        if abs(value) < self.off_below:
-            value = 0.0
+        try:
+            # Apply off threshold
+            if abs(value) < self.off_below:
+                value = 0.0
 
-        # Clamp
-        value = max(-self.max_power, min(self.max_power, value))
+            # Clamp
+            value = max(-self.max_power, min(self.max_power, value))
 
-        # Track previous requested value
-        last_req = getattr(self, 'last_req_value_in1', 0.0)
+            # Track previous requested value
+            last_req = getattr(self, 'last_req_value_in1', 0.0)
 
-        # Enable pin handling
-        if getattr(self, 'enable_pin', None):
-            # Keep enabled if value != 0 or braking
-            is_braking = (value == 0.0 and (self.last_value_in1 != 0.0 or self.last_value_in2 != 0.0) and self.brake_time > 0.0)
-            if value != 0.0 or is_braking:
-                self.enable_pin.set_digital(print_time, 1)
-            else:
-                self.enable_pin.set_digital(print_time, 0)
+            # Enable pin handling
+            if getattr(self, 'enable_pin', None):
+                if value != 0.0 and last_req == 0.0:
+                    self.enable_pin.set_digital(print_time, 1)
+                elif value == 0.0 and last_req != 0.0:
+                    self.enable_pin.set_digital(print_time, 0)
 
-        # --- Kick-start logic ---
-        # Only trigger if moving from stop or large change
-        do_kick = (value != 0.0
-                and self.kick_start_time > 0
-                and (last_req == 0.0 or abs(value) - abs(last_req) > 0.5))
-        if do_kick:
+            # --- Kick-start logic ---
+            # Only trigger if moving from stop or large change
+            do_kick = (value != 0.0
+                    and self.kick_start_time > 0
+                    and (last_req == 0.0 or abs(value) - abs(last_req) > 0.5))
+            if do_kick:
+                self.last_req_value_in1 = value
+                kick_pwm = self.max_power if value > 0 else -self.max_power
+
+                # Forward kick
+                if value > 0:
+                    self.in1_pin.set_pwm(print_time, self.max_power)
+                    self.in2_pin.set_pwm(print_time, 0)
+                else:  # Reverse kick
+                    self.in1_pin.set_pwm(print_time, 0)
+                    self.in2_pin.set_pwm(print_time, self.max_power)
+
+                # Update last applied values
+                self.last_value_in1 = kick_pwm if value > 0 else 0.0
+                self.last_value_in2 = kick_pwm if value < 0 else 0.0
+
+                return "delay", self.kick_start_time
+
+            # --- Normal operation ---
             self.last_req_value_in1 = value
-            kick_pwm = self.max_power if value > 0 else -self.max_power
 
-            # Forward kick
-            if value > 0:
-                self.in1_pin.set_pwm(print_time, self.max_power)
+            if value > 0.0:  # Forward
+                self.in1_pin.set_pwm(print_time, value)
                 self.in2_pin.set_pwm(print_time, 0)
-            else:  # Reverse kick
+                self.last_value_in1, self.last_value_in2 = value, 0.0
+
+            elif value < 0.0:  # Reverse
                 self.in1_pin.set_pwm(print_time, 0)
-                self.in2_pin.set_pwm(print_time, self.max_power)
+                self.in2_pin.set_pwm(print_time, -value)
+                self.last_value_in1, self.last_value_in2 = 0.0, -value
 
-            # Update last applied values
-            self.last_value_in1 = kick_pwm if value > 0 else 0.0
-            self.last_value_in2 = kick_pwm if value < 0 else 0.0
+            else:  # Zero: optionally apply short brake
+                if getattr(self, 'brake_time', 20.0) > 0.0 and (self.last_value_in1 != 0.0 or self.last_value_in2 != 0.0):
+                    # Apply brake pulse: both outputs high
+                    self.enable_pin.set_digital(print_time, 1)
+                    self.in1_pin.set_pwm(print_time, self.max_power)
+                    self.in2_pin.set_pwm(print_time, self.max_power)
+                    self.last_value_in1 = self.max_power
+                    self.last_value_in2 = self.max_power
+                    logging.info("HBridgeMotor: Applying brake for %.3f sec" % self.brake_time)
 
-            return "delay", self.kick_start_time
+                    # Schedule timer safely
+                    def end_brake(eventtime):
+                        self.in1_pin.set_pwm(eventtime, 0.0)
+                        self.in2_pin.set_pwm(eventtime, 0.0)
+                        self.last_value_in1 = 0.0
+                        self.last_value_in2 = 0.0
+                        self.enable_pin.set_digital(self.reactor.monotonic(), 0)
+                        logging.info("HBridgeMotor: Brake ended, coasting")
+                        return self.reactor.NEVER
 
-        # --- Normal operation ---
-        self.last_req_value_in1 = value
-
-        if value > 0.0:  # Forward
-            self.in1_pin.set_pwm(print_time, value)
-            self.in2_pin.set_pwm(print_time, 0.)
-            self.last_value_in1, self.last_value_in2 = value, 0.0
-
-        elif value < 0.0:  # Reverse
-            self.in1_pin.set_pwm(print_time, 0.)
-            self.in2_pin.set_pwm(print_time, -value)
-            self.last_value_in1, self.last_value_in2 = 0.0, -value
-
-        else:  # Zero: optionally apply short brake
-            if getattr(self, 'brake_time', 20.0) > 0.0 and (self.last_value_in1 != 0.0 or self.last_value_in2 != 0.0):
-                # Apply brake pulse: both outputs high
-                self.in1_pin.set_pwm(print_time, self.max_power)
-                self.in2_pin.set_pwm(print_time, self.max_power)
-                self.last_value_in1 = self.max_power
-                self.last_value_in2 = self.max_power
-                logging.info("HBridgeMotor: Applying brake for %.3f sec" % self.brake_time)
-
-                # Schedule timer safely
-                def end_brake(eventtime):
-                    self.in1_pin.set_pwm(eventtime, 0.0)
-                    self.in2_pin.set_pwm(eventtime, 0.0)
-                    self.last_value_in1 = 0.0
-                    self.last_value_in2 = 0.0
-                    logging.info("HBridgeMotor: Brake ended, coasting")
-                    return self.reactor.NEVER
-
-                min_timer_interval = 0.001  # 1ms minimum to avoid "timer too close"
-                waketime = max(self.reactor.monotonic() + self.brake_time,
-                            self.reactor.monotonic() + min_timer_interval)
-                self.reactor.register_timer(end_brake, waketime)
-                return "delay", self.brake_time
-            else:
-                # Coast immediately
-                self.in1_pin.set_pwm(print_time, 0.0)
-                self.in2_pin.set_pwm(print_time, 0.0)
-                self.last_value_in1, self.last_value_in2 = 0.0, 0.0
-
+                    min_timer_interval = 0.005  # 5ms minimum to avoid "timer too close"
+                    waketime = max(self.reactor.monotonic() + self.brake_time,
+                                self.reactor.monotonic() + min_timer_interval)
+                    time = self.reactor.monotonic()
+                    logging.info(f"waketime = {waketime}, time = {time}, delta = {waketime - time}")
+                    self.reactor.register_timer(end_brake, waketime)
+                    logging.info("HBridgeMotor: Brake timer registered")
+                    return "delay", self.brake_time
+                else:
+                    # Coast immediately
+                    self.in1_pin.set_pwm(print_time, 0)
+                    self.in2_pin.set_pwm(print_time, 0)
+                    self.last_value_in1, self.last_value_in2 = 0.0, 0.0
+        except Exception as e:
+            logging.error("HBridgeMotor: Error applying speed: %s" % str(e))
 
     
+    def set_drv_mode(self, print_time, mode, pwm_value):
+        pwm_value = max(0., min(self.max_power, pwm_value))
+    
+        if mode == 'sleep':
+            self.enable_pin.set_digital(print_time, 0)
+            self.in1_pin.set_pwm(print_time, 0.0)
+            self.in2_pin.set_pwm(print_time, 0.0)
+            logging.info("HBridgeMotor: Driver set to sleep mode")
+            return
+        
+        self.enable_pin.set_digital(print_time, 1)
+        
+        if mode == 'forward':
+            self.in1_pin.set_pwm(print_time, pwm_value)
+            self.in2_pin.set_pwm(print_time, 0.0)
+            logging.info("HBridgeMotor: Driver set to forward mode with PWM %.3f" % pwm_value)
+        
+        elif mode == 'reverse':
+            self.in1_pin.set_pwm(print_time, 0.0)
+            self.in2_pin.set_pwm(print_time, pwm_value)
+            logging.info("HBridgeMotor: Driver set to reverse mode with PWM %.3f" % pwm_value)
+
+        elif mode == 'brake':
+            self.in1_pin.set_pwm(print_time, 1.0)
+            self.in2_pin.set_pwm(print_time, 1.0)
+            logging.info("HBridgeMotor: Driver set to brake mode")
+        
+        elif mode == 'coast':
+            self.in1_pin.set_pwm(print_time, 0.0)
+            self.in2_pin.set_pwm(print_time, 0.0)
+            logging.info("HBridgeMotor: Driver set to coast mode")
+        
+        else:
+            raise ValueError("Invalid driver mode: %s" % mode)
+
+    
+    def cmd_SET_DRV_MODE(self, gcmd):
+        mode = gcmd.get('MODE')
+        pwm_value = gcmd.get_float('VALUE', 1.0, minval=0., maxval=1.)
+        try:
+            self.drvq.queue_gcode_request(mode)
+        except Exception as e:
+            gcmd.error("HBridgeMotor: Error setting driver mode: %s" % str(e))
+
+
     def set_speed_from_command(self, value):
         self.gcrq.queue_gcode_request(value)
 
+    
     def cmd_SET_DRV_MOTOR(self, gcmd):
         value = gcmd.get_float('VALUE', 0., minval=-1., maxval=1.)
         self.set_speed_from_command(value)
