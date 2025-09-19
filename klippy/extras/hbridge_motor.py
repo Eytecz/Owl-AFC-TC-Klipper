@@ -14,10 +14,7 @@ class HBridgeMotor:
         self.reactor = self.printer.get_reactor()
 
         # Initial state
-        self.last_value_in1 = self.last_value_in2 = 0.
         self.last_pwm_value = 0.
-        self.req_pwm_value = 0.
-
 
         # Register handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
@@ -84,7 +81,7 @@ class HBridgeMotor:
         if abs(pwm_value) < self.off_below:
             pwm_value = 0.0
 
-        if pwm_value == self.last_pwm_value:
+        if pwm_value == self.last_pwm_value and pwm_value != 0.0:
            return        
         
         # Kick-start
@@ -100,12 +97,17 @@ class HBridgeMotor:
                 self.set_drv_mode(print_time, mode, self.max_power)
                 return "delay", self.kick_start_time
         
-        # Normal forward/reverse
+        # Braking
+        if self.brake_time > 0 and self.last_pwm_value != 0.0 and pwm_value == 0.0:
+            self.set_drv_mode(print_time, 'brake')
+            return "delay", self.brake_time
+        
+        # Normal forward/reverse/coast
         mode = 'forward' if pwm_value > 0 else 'reverse' if pwm_value < 0 else 'coast'
         self.set_drv_mode(print_time, mode, abs(pwm_value))
 
     
-    def set_drv_mode(self, print_time, mode, pwm_value):
+    def set_drv_mode(self, print_time, mode, pwm_value=0.0):
         valid_modes = {"sleep", "forward", "reverse", "brake", "coast"}
         if mode not in valid_modes:
             raise ValueError(f"Invalid driver mode: {mode}")
