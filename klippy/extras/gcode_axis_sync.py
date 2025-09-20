@@ -210,6 +210,7 @@ class GCodeAxisSync:
         raise ValueError("No available axis found")
 
     def intercept_move(self, newpos, speed):
+        logging.info(f"GCodeAxisSync: Intercepted move to {newpos} at speed {speed}")
         if self.presync_queue:
             self.run_presync_queue()
             
@@ -241,6 +242,7 @@ class GCodeAxisSync:
             newpos[axis_idx] = max(pos_min or target, min(target, pos_max or target))
 
         self.original_move(newpos, speed)
+        logging.info(f"GCodeAxisSync: Updated move to {newpos} at speed {speed}")
 
 def load_config(config):
     return GCodeAxisSync(config)
