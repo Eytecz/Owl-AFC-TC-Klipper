@@ -1,11 +1,11 @@
-# Manual or automated control of a DC motor via H-Bridge
+# Manual or automated control of a DC motor via Low-Voltage H-Bridge Drivers
 #
 # Copyright (C) 2025 Eytecz
 #
 # This file may be distributed under the terms of the GNU GPLv3 license
 
 import logging
-from . import pulse_counter, output_pin
+from . import output_pin
 
 class HBridgeMotor:
     def __init__(self, config):
@@ -52,20 +52,17 @@ class HBridgeMotor:
             self.enable_pin = ppins.setup_pin('digital_out', enable_pin)
             self.enable_pin.setup_max_duration(0.)
 
-
         # Create g-code request queue
         if self.in1_pin.get_mcu() != self.in2_pin.get_mcu():
             raise config.error("in1_pin and in2_pin must be on the same MCU")
-
         self.motion_request = output_pin.GCodeRequestQueue(config, self.in1_pin.get_mcu(),
                                                 self.execute_controlled_drive)
 
         # Register g-code commands
-        self.cmd_SET_DRV_MOTOR_help = "Set the speed of the H-Bridge motor. Usage: SET_DRV_MOTOR MOTOR=<motor> VALUE=<value>"
-        self.gcode.register_mux_command('SET_DRV_MOTOR', 'MOTOR', self.name,
-                                        self.cmd_SET_DRV_MOTOR, desc=self.cmd_SET_DRV_MOTOR_help)
-    
-    
+        self.cmd_HBRIDGE_MOTOR_help = "Set the speed of the H-Bridge motor. Usage: HBRIDGE_MOTOR MOTOR=<motor> VALUE=<-1..1> RUNTIME=<seconds> DELAY=<seconds>"
+        self.gcode.register_mux_command('HBRIDGE_MOTOR', 'MOTOR', self.name,
+                                        self.cmd_HBRIDGE_MOTOR, desc=self.cmd_HBRIDGE_MOTOR_help)
+
     def handle_ready(self):
         pass
 
@@ -124,21 +121,21 @@ class HBridgeMotor:
             self.in1_pin.set_pwm(print_time, pwm_value)
             self.in2_pin.set_pwm(print_time, 0.0)
             self.last_pwm_value = pwm_value
-        
+                   
         elif mode == 'reverse':
             self.in1_pin.set_pwm(print_time, 0.0)
             self.in2_pin.set_pwm(print_time, pwm_value)
             self.last_pwm_value = -pwm_value
-
+            
         elif mode == 'brake':
             self.in1_pin.set_pwm(print_time, 1.0)
             self.in2_pin.set_pwm(print_time, 1.0)
             self.last_pwm_value = 0.0
-        
+            
         elif mode == 'coast':
             self.in1_pin.set_pwm(print_time, 0.0)
             self.in2_pin.set_pwm(print_time, 0.0)
-            self.last_pwm_value = 0.0
+            self.last_pwm_value = 0.0   
 
     def scheduled_motion(self, pwm_value, runtime=None, print_time=None):
         def start_motion(eventtime):
@@ -156,7 +153,7 @@ class HBridgeMotor:
         else:
             self.reactor.register_timer(start_motion, print_time)
     
-    def cmd_SET_DRV_MOTOR(self, gcmd):
+    def cmd_HBRIDGE_MOTOR(self, gcmd):
         value = gcmd.get_float('VALUE', 0., minval=-1., maxval=1.)
         runtime = gcmd.get_float('RUNTIME', None, minval=0.)
         delay = gcmd.get_float('DELAY', None)
