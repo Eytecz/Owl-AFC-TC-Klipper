@@ -38,7 +38,7 @@ class PurgeBelt:
         self.flow_rate = config.getfloat('flow_rate', 30., above=0)
 
         # Register handlers
-        self.printer.register_event_handler("Klippy:ready", self.handle_ready)
+        self.printer.register_event_handler("klippy:ready", self.handle_ready)
         self.printer.register_event_handler("klippy:connect", self.handle_connect)
 
         # Register g-code commands

@@ -152,6 +152,9 @@ class HBridgeMotor:
         else:
             self.reactor.register_timer(start_motion, print_time)
     
+    def get_name(self):
+        return self.name
+    
     def cmd_HBRIDGE_MOTOR(self, gcmd):
         value = gcmd.get_float('VALUE', 0., minval=-1., maxval=1.)
         runtime = gcmd.get_float('RUNTIME', None, minval=0.)
