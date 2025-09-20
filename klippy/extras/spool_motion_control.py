@@ -27,15 +27,19 @@ class SpoolMotionControl:
 
         # Register required objects
         self.gcode = self.printer.lookup_object('gcode')
-        self.toolhead = self.printer.lookup_object('toolhead')
-        self.gcode_move = self.printer.lookup_object('gcode_move')
-
+        
         # Read config section
         self.name = config.get_name().split()[1]
         self.spool_diameter = [config.getfloat('spool_diameter_min', 80.0),
                                config.getfloat('spool_diameter_max', 200.0)]
         self.poll_interval = config.getfloat('poll_interval', 0.5, minval=0.01)
         self.assist_threshold = config.getfloat('assist_threshold', 20.0, minval=0.0)
+
+        # Register g-code commands
+        self.gcode.register_mux_command('SPOOL_MOTION_CONTROL', 'SPOOL', self.name,
+                                        self.cmd_SPOOL_MOTION_CONTROL,
+                                        desc="Control spool motion functionality.
+        )
 
 
     def handle_ready(self):
@@ -78,11 +82,8 @@ class SpoolMotionControl:
             self.enable_spool_measurement = config.getboolean('enable_spool_measurement', True)
         else:
             pass
-        
-        # Intercept self.toolhead.move commands to monitor for print moves
-        self.original_move = self.toolhead.move
-        
-        
+
+
     def poll_stepper_start(self):
         pass
 
@@ -90,18 +91,32 @@ class SpoolMotionControl:
         pass
 
     def stepper_tracking(self, eventtime):
-        if not self.tracking_state:
-            self.tracking_pos = self.tracked_stepper.get_position()[0]
-            self.tracking_state = True
-            return eventtime + self.poll_interval
+        # Add callback to note stepper activity
+        motion_queuing = self.tracked_stepper.motion_queuing
+        trapq = motion_queuing.lookup_trapq_append
+        logging.info(f'trapq: {trapq}')
 
-        pos = self.tracked_stepper.get_position()[0]
-        delta_pos = pos - self.tracking_pos
+        # if not self.tracking_state:
+        #     self.tracking_pos = self.tracked_stepper.get_position()[0]
+        #     self.tracking_state = True
+        #     return eventtime + self.poll_interval
+
+        # pos = self.tracked_stepper.get_position()[0]
+        # delta_pos = pos - self.tracking_pos
         
-        if abs(delta_pos) >= self.assist_threshold:
-            self.tracking_pos = pos
-            self.assist(delta_pos)
+        # if abs(delta_pos) >= self.assist_threshold:
+        #     self.tracking_pos = pos
+        #     self.assist(delta_pos)
+    
+    def cmd_SPOOL_MOTION_CONTROL(self, gcmd):
+        try:
+            self.stepper_tracking(self.reactor.monotonic())
+        except Exception as e:
+            logging.error(f"Error in stepper_tracking: {e}")
 
+
+def load_config_prefix(config):
+    return SpoolMotionControl(config)
 
 
         
