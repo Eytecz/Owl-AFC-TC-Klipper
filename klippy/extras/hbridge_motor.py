@@ -24,7 +24,6 @@ class HBridgeMotor:
         # Register required objects
         self.gcode = self.printer.lookup_object('gcode')
 
-
         # Read config section
         self.name = config.get_name().split()[1]
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
