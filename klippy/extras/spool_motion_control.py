@@ -65,10 +65,8 @@ class SpoolMotionControl:
         # Connect tracked stepper
         for manual_stepper in self.printer.lookup_objects('manual_stepper'):
             name = manual_stepper[1].get_steppers()[0].get_name()
-            logging.info(f'checking name {name}')
             if name == self.stepper_name:
                 self.stepper = manual_stepper[1]
-                logging.info(f'Found stepper: {name}')
         if self.stepper is None:
             raise self.config.error("Could not find stepper '%s'" % self.stepper_name)  
         self.enable_stepper_tracking = self.config.getboolean('enable_stepper_tracking', True)
@@ -88,78 +86,37 @@ class SpoolMotionControl:
 
         self.toolhead = self.printer.lookup_object('toolhead')
         self.trapq_append_original = self.stepper.trapq_append
-        self.stepper.trapq_append = self.trapq_append_intercept
+        self.stepper.trapq_append = self._trapq_append_intercept
 
         self.wipe_trapq_original = self.stepper.motion_queuing.wipe_trapq
-        self.stepper.motion_queuing.wipe_trapq = self.wipe_trapq_intercept
-
-    def poll_stepper_start(self):
-        pass
-
-    def poll_stepper_stop(self):
-        pass
-
-    def stepper_tracking(self, eventtime):
-        # Add callback to note stepper activity
-        motion_queuing = self.stepper.motion_queuing
-        trapq = motion_queuing.lookup_trapq_append
-        logging.info(f'trapq: {trapq}')
-        logging.info(f'self.trapq: {self.trapq}')
-
-        # if not self.tracking_state:
-        #     self.tracking_pos = self.tracked_stepper.get_position()[0]
-        #     self.tracking_state = True
-        #     return eventtime + self.poll_interval
-
-        # pos = self.tracked_stepper.get_position()[0]
-        # delta_pos = pos - self.tracking_pos
-        
-        # if abs(delta_pos) >= self.assist_threshold:
-        #     self.tracking_pos = pos
-        #     self.assist(delta_pos)
-    
+        self.stepper.motion_queuing.wipe_trapq = self._wipe_trapq_intercept
+   
     def cmd_SPOOL_MOTION_CONTROL(self, gcmd):
         try:
             self.stepper_tracking(self.reactor.monotonic())
         except Exception as e:
             logging.exception(f"Error in stepper_tracking: {e}")
     
-    def trapq_append_intercept(self, *args):
+    def _trapq_append_intercept(self, *args):
         self.trapq_append_original(*args)
-        print_time = self.toolhead.get_last_move_time()
-        reactor_time = self.reactor.monotonic()
-        logging.info(f'print_time = {print_time}')
-        logging.info(f'reactor_time = {reactor_time}')
-        logging.info(f'*args = {args}')
-        logging.info(f'self.trapq = {args[0]}')
-        logging.info(f'movetime = {args[1]}')
-        logging.info(f'accel_t = {args[2]}')
-        logging.info(f'cruise_t = {args[3]}')
-        logging.info(f'accel_t = {args[4]}')
-        logging.info(f'axis_r = {args[8]}')
-        logging.info(f'cruise_v = {args[12]}')
-        logging.info(f'accel = {args[13]}')
         self._motion_extraction(*args)
 
-    def wipe_trapq_intercept(self, *args):
+    def _wipe_trapq_intercept(self, *args):
         self.wipe_trapq_original(*args)
-        logging.info('wipe_trapq called')
+        self.hbridge_motor.abort_async_motion()
 
     def _motion_extraction(self, *args):
-        curtime = self.reactor.monotonic() 
-        print_time = self.mcu.estimated_print_time(curtime)
-        movetime_start = args[1]
-        move_duration = args[2] + args[3] + args[4]
-        movetime_end = movetime_start + move_duration
+        print_time = args[1]
+        runtime = args[2] + args[3] + args[4]
         move_distance = (1/2 * args[13] * (args[2]**2) + args[12] * args[3] + 1/2 * args[13] * (args[4]**2))* args[8]
         cruise_v = args[12]
-        logging.info(f'curtime = {curtime}, print_time = {print_time}, movetime_start = {movetime_start}, movetime_end = {movetime_end}, move_duration = {move_duration}, move_distance = {move_distance}, cruise_v = {cruise_v}')
-        
+        move_dir = args[8] 
 
-        pwm_value = 1.0
-        runtime = move_duration
-        self.hbridge_motor.scheduled_motion(pwm_value, move_duration)
+        self.schedule_async_motion(cruise_v, move_dir, print_time, runtime)
 
+    def schedule_async_motion(self, cruise_v, move_dir, print_time, runtime):
+        pwm_value = 1.0 * move_dir
+        self.hbridge_motor.scheduled_async_motion(pwm_value, print_time, runtime)
 
 def load_config_prefix(config):
     return SpoolMotionControl(config)

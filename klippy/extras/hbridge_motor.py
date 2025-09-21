@@ -15,6 +15,9 @@ class HBridgeMotor:
 
         # Initial state
         self.last_pwm_value = 0.
+        self.start_timer = None
+        self.stop_timer = None
+        self.async_stop_timer = None
 
         # Register handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
@@ -28,7 +31,7 @@ class HBridgeMotor:
         self.name = config.get_name().split()[1]
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
         self.kick_start_time = config.getfloat('kick_start_time', 0.1, minval=0.)
-        self.brake_time = config.getfloat('brake_time', 1.0, minval=0.)
+        self.brake_time = config.getfloat('brake_time', 0.0, minval=0.)
         self.off_below = config.getfloat('off_below', 0., minval=0., maxval=1.)
         cycle_time = config.getfloat('cycle_time', 0.1, minval=0.01)
         hardware_pwm = config.getboolean('hardware_pwm', False)
@@ -73,10 +76,7 @@ class HBridgeMotor:
     
     def execute_controlled_drive(self, print_time, pwm_value):
         if abs(pwm_value) < self.off_below:
-            pwm_value = 0.0
-
-        if pwm_value == self.last_pwm_value and pwm_value != 0.0:
-           return        
+            pwm_value = 0.0        
         
         # Kick-start
         if self.kick_start_time > 0 and pwm_value != 0.0:
@@ -98,7 +98,7 @@ class HBridgeMotor:
 
         # Normal forward/reverse/sleep
         mode = 'forward' if pwm_value > 0 else 'reverse' if pwm_value < 0 else 'sleep'
-        self.set_drv_mode(print_time, mode, abs(pwm_value))
+        self.set_drv_mode(print_time, mode, abs(pwm_value))   
     
     def set_drv_mode(self, print_time, mode, pwm_value=0.0):
         valid_modes = {"sleep", "forward", "reverse", "brake", "coast"}
@@ -136,22 +136,41 @@ class HBridgeMotor:
             self.in2_pin.set_pwm(print_time, 0.0)
             self.last_pwm_value = 0.0   
 
-    def scheduled_motion(self, pwm_value, runtime=None, print_time=None):
+    def scheduled_motion(self, pwm_value, runtime=None, eventtime=None):
         def start_motion(eventtime):
             self.motion_request.queue_gcode_request(pwm_value)
+            if self.stop_timer:   # Remove any existing end motion timer
+                self.reactor.unregister_timer(self.stop_timer)
+                self.stop_timer = None
             if runtime is not None:
                 def end_motion(eventtime):
                     self.motion_request.queue_gcode_request(0.0)
                     return self.reactor.NEVER
                 stop_time = self.reactor.monotonic() + runtime
-                self.reactor.register_timer(end_motion, stop_time)
+                self.stop_timer = self.reactor.register_timer(end_motion, stop_time)
             return self.reactor.NEVER
 
-        if print_time is None:
+        if eventtime is None:
             start_motion(self.reactor.monotonic())
         else:
-            self.reactor.register_timer(start_motion, print_time)
+            self.start_timer = self.reactor.register_timer(start_motion, eventtime)
+
+    def scheduled_async_motion(self, pwm_value, print_time, runtime=None):
+        self.motion_request.send_async_request(pwm_value, print_time)
+        if runtime is not None:
+            def end_motion(eventtime):
+                print_time = mcu.estimated_print_time(eventtime)
+                self.motion_request.send_async_request(0.0, print_time + mcu.min_schedule_time())
+                return self.reactor.NEVER
+            mcu = self.in1_pin.get_mcu()
+            mcu_time = mcu.print_time_to_clock(print_time)
+            mcu_time = mcu._clocksync.estimate_clock_systime(mcu_time)
+            stop_time = mcu_time + runtime - mcu.min_schedule_time()
+            self.sched_stop_timer = self.reactor.register_timer(end_motion, stop_time)
     
+    def abort_async_motion(self):
+        self.reactor.update_timer(self.sched_stop_timer, self.reactor.NOW)        
+
     def get_name(self):
         return self.name
     
@@ -159,8 +178,8 @@ class HBridgeMotor:
         value = gcmd.get_float('VALUE', 0., minval=-1., maxval=1.)
         runtime = gcmd.get_float('RUNTIME', None, minval=0.)
         delay = gcmd.get_float('DELAY', None)
-        print_time = None if delay is None else self.reactor.monotonic() + delay
-        self.scheduled_motion(value, runtime, print_time)
+        eventtime = None if delay is None else self.reactor.monotonic() + delay
+        self.scheduled_motion(value, runtime, eventtime)
   
 
 def load_config_prefix(config):
