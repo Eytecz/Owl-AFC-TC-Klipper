@@ -145,9 +145,11 @@ class HBridgeMotor:
     def scheduled_motion(self, pwm_value, runtime=None, eventtime=None):
         def start_motion(eventtime):
             self.motion_request.queue_gcode_request(pwm_value)
-            if self.stop_timer:   # Remove any existing end motion timer
+
+            if self.stop_timer:
                 self.reactor.unregister_timer(self.stop_timer)
                 self.stop_timer = None
+                
             if runtime is not None:
                 def end_motion(eventtime):
                     self.motion_request.queue_gcode_request(0.0)
