@@ -22,6 +22,10 @@ class HBridgeMotor:
         self.sched_stop_timer = None
         self.active_motions = {}  
 
+        # Queue for async motions
+        self.cmd_queue = []      # list of (print_time, pwm_value)
+        self.queue_timer = None  # single timer processing the queue
+
         # Register handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
         self.printer.register_event_handler("klippy:connect", self.handle_connect)
@@ -161,30 +165,75 @@ class HBridgeMotor:
         else:
             self.start_timer = self.reactor.register_timer(start_motion, eventtime)
 
+    # def scheduled_async_motion(self, pwm_value, print_time, runtime=None):
+    #     self.motion_request.send_async_request(pwm_value, print_time)
+    #     logging.info(f'{print_time}, send_async_request planned')
+    #     logging.info(f'{self.get_print_time(self.reactor.monotonic())}, actual send time of send_async_request for print_time={print_time}')
+
+    #     if runtime is not None:
+    #         stop_time = self.get_sys_time(print_time) + runtime - self.mcu.min_schedule_time()
+
+    #         def end_motion(eventtime, stop_time=stop_time):  # capture stop_time
+    #             pt = self.get_print_time(eventtime)
+    #             logging.info(f'{pt}, end_motion called (stop_time={self.get_print_time(stop_time)})')
+    #             send_pt = pt + self.mcu.min_schedule_time()
+    #             self.motion_request.send_async_request(0.0, send_pt)
+    #             logging.info(f'{pt}, actual send time of send_async_request for print_time={send_pt}')
+    #             return self.reactor.NEVER
+
+    #         self.sched_stop_timer = self.reactor.register_timer(end_motion, stop_time)
+    #         logging.info(f'{self.get_print_time(self.reactor.monotonic())}, timer registered for stop_time={self.get_print_time(stop_time)}')
+
+    # def abort_async_motion(self):
+    #     if self.sched_stop_timer:
+    #         logging.info(f'{self.get_print_time(self.reactor.monotonic())}, abort_async_motion called')
+    #         self.reactor.update_timer(self.sched_stop_timer, self.reactor.NOW)
+    #         self.sched_stop_timer = None        
+
+
+    # Queue-based async scheduling
     def scheduled_async_motion(self, pwm_value, print_time, runtime=None):
-        self.motion_request.send_async_request(pwm_value, print_time)
-        logging.info(f'{print_time}, send_async_request planned')
-        logging.info(f'{self.get_print_time(self.reactor.monotonic())}, actual send time of send_async_request for print_time={print_time}')
+        insort(self.cmd_queue, (print_time, pwm_value))
+        logging.info(f'{print_time}, enqueued pwm={pwm_value}')
 
         if runtime is not None:
-            stop_time = self.get_sys_time(print_time) + runtime - self.mcu.min_schedule_time()
+            stop_time = print_time + runtime
+            stop_time -= 1e-6
+            insort(self.cmd_queue, (stop_time, 0.0))
+            logging.info(f'{stop_time}, enqueued pwm=0.0')
 
-            def end_motion(eventtime, stop_time=stop_time):  # capture stop_time
-                pt = self.get_print_time(eventtime)
-                logging.info(f'{pt}, end_motion called (stop_time={self.get_print_time(stop_time)})')
-                send_pt = pt + self.mcu.min_schedule_time()
-                self.motion_request.send_async_request(0.0, send_pt)
-                logging.info(f'{pt}, actual send time of send_async_request for print_time={send_pt}')
-                return self.reactor.NEVER
+        logging.info(f'self.cmd_queue={self.cmd_queue}')
 
-            self.sched_stop_timer = self.reactor.register_timer(end_motion, stop_time)
-            logging.info(f'{self.get_print_time(self.reactor.monotonic())}, timer registered for stop_time={self.get_print_time(stop_time)}')
+        # If nothing running, kick off the queue
+        if not self.queue_timer:
+            self._start_next()
+
 
     def abort_async_motion(self):
-        if self.sched_stop_timer:
-            logging.info(f'{self.get_print_time(self.reactor.monotonic())}, abort_async_motion called')
-            self.reactor.update_timer(self.sched_stop_timer, self.reactor.NOW)
-            self.sched_stop_timer = None        
+        self.cmd_queue.clear()
+        if self.queue_timer:
+            self.reactor.update_timer(self.queue_timer, self.reactor.NEVER)
+            self.queue_timer = None
+
+
+    def _start_next(self):
+        """Start the next queued command, or stop if empty."""
+        if not self.cmd_queue:
+            self.queue_timer = None
+            return
+
+        pt, pwm = self.cmd_queue.pop(0)
+        sys_time = self.get_sys_time(pt) - self.mcu.min_schedule_time()
+
+        def _runner(eventtime):
+            self.motion_request.send_async_request(pwm, pt)
+            logging.info(f'{self.get_print_time(eventtime)}, executed pwm={pwm} at target_pt={pt}')
+            self.queue_timer = None
+            self._start_next()  # immediately arm the next one
+            return self.reactor.NEVER
+
+        self.queue_timer = self.reactor.register_timer(_runner, sys_time)
+        logging.info(f'armed next: pt={pt}, sys_time={sys_time}')
 
     def get_print_time(self, systime):
         print_time = self.mcu.estimated_print_time(systime)
@@ -193,7 +242,6 @@ class HBridgeMotor:
     def get_sys_time(self, print_time):
         sys_time = self.mcu._clocksync.estimate_clock_systime(self.mcu.print_time_to_clock(print_time))
         return sys_time
-
 
     def get_name(self):
         return self.name
