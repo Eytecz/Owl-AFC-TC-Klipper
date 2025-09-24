@@ -6,6 +6,8 @@
 
 import logging
 from . import output_pin
+from bisect import insort
+
 
 class HBridgeMotor:
     def __init__(self, config):
@@ -17,7 +19,8 @@ class HBridgeMotor:
         self.last_pwm_value = 0.
         self.start_timer = None
         self.stop_timer = None
-        self.async_stop_timer = None
+        self.sched_stop_timer = None
+        self.active_motions = {}  
 
         # Register handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
@@ -30,7 +33,7 @@ class HBridgeMotor:
         # Read config section
         self.name = config.get_name().split()[1]
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
-        self.kick_start_time = config.getfloat('kick_start_time', 0.1, minval=0.)
+        self.kick_start_time = config.getfloat('kick_start_time', 0.0, minval=0.)
         self.brake_time = config.getfloat('brake_time', 0.0, minval=0.)
         self.off_below = config.getfloat('off_below', 0., minval=0., maxval=1.)
         cycle_time = config.getfloat('cycle_time', 0.1, minval=0.01)
@@ -48,6 +51,8 @@ class HBridgeMotor:
             pin.setup_cycle_time(cycle_time, hardware_pwm)
             pin.setup_start_value(0., 0.)
             setattr(self, attr, pin)
+        
+        self.mcu = self.in1_pin.get_mcu()
 
         enable_pin = config.get('enable_pin', None)
         if enable_pin:
@@ -101,6 +106,7 @@ class HBridgeMotor:
         self.set_drv_mode(print_time, mode, abs(pwm_value))   
     
     def set_drv_mode(self, print_time, mode, pwm_value=0.0):
+        logging.info(f'{print_time}, {mode}, {pwm_value}')
         valid_modes = {"sleep", "forward", "reverse", "brake", "coast"}
         if mode not in valid_modes:
             raise ValueError(f"Invalid driver mode: {mode}")
@@ -157,19 +163,37 @@ class HBridgeMotor:
 
     def scheduled_async_motion(self, pwm_value, print_time, runtime=None):
         self.motion_request.send_async_request(pwm_value, print_time)
+        logging.info(f'{print_time}, send_async_request planned')
+        logging.info(f'{self.get_print_time(self.reactor.monotonic())}, actual send time of send_async_request for print_time={print_time}')
+
         if runtime is not None:
-            def end_motion(eventtime):
-                print_time = mcu.estimated_print_time(eventtime)
-                self.motion_request.send_async_request(0.0, print_time + mcu.min_schedule_time())
+            stop_time = self.get_sys_time(print_time) + runtime - self.mcu.min_schedule_time()
+
+            def end_motion(eventtime, stop_time=stop_time):  # capture stop_time
+                pt = self.get_print_time(eventtime)
+                logging.info(f'{pt}, end_motion called (stop_time={self.get_print_time(stop_time)})')
+                send_pt = pt + self.mcu.min_schedule_time()
+                self.motion_request.send_async_request(0.0, send_pt)
+                logging.info(f'{pt}, actual send time of send_async_request for print_time={send_pt}')
                 return self.reactor.NEVER
-            mcu = self.in1_pin.get_mcu()
-            mcu_time = mcu.print_time_to_clock(print_time)
-            mcu_time = mcu._clocksync.estimate_clock_systime(mcu_time)
-            stop_time = mcu_time + runtime - mcu.min_schedule_time()
+
             self.sched_stop_timer = self.reactor.register_timer(end_motion, stop_time)
-    
+            logging.info(f'{self.get_print_time(self.reactor.monotonic())}, timer registered for stop_time={self.get_print_time(stop_time)}')
+
     def abort_async_motion(self):
-        self.reactor.update_timer(self.sched_stop_timer, self.reactor.NOW)        
+        if self.sched_stop_timer:
+            logging.info(f'{self.get_print_time(self.reactor.monotonic())}, abort_async_motion called')
+            self.reactor.update_timer(self.sched_stop_timer, self.reactor.NOW)
+            self.sched_stop_timer = None        
+
+    def get_print_time(self, systime):
+        print_time = self.mcu.estimated_print_time(systime)
+        return print_time
+    
+    def get_sys_time(self, print_time):
+        sys_time = self.mcu._clocksync.estimate_clock_systime(self.mcu.print_time_to_clock(print_time))
+        return sys_time
+
 
     def get_name(self):
         return self.name
