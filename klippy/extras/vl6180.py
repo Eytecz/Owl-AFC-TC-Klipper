@@ -4,11 +4,30 @@
 #
 # This file may be distributed under the terms of the GNU GPLv2 license.
 
-from .output_pin import PrinterOutputPin
 from . import bus
 import codecs
 import timeit
 import time
+
+class EnableHelper:
+  def __init__(self, mcu, pin_desc, cmd_queue=None, value=0):
+    self.enable_pin = bus.MCU_bus_digital_out(mcu, pin_desc, cmd_queue, value)
+
+  def init(self):
+    mcu = self.enable_pin.get_mcu()
+    curtime = mcu.get_printer().get_reactor().monotonic()
+    print_time = mcu.estimated_print_time(curtime)
+
+    # Ensure chip is powered off
+    minclock = mcu.print_time_to_clock(print_time + mcu.min_schedule_time())
+    self.enable_pin.update_digital_out(value=0, minclock=minclock)
+
+    # Enable chip
+    minclock = mcu.print_time_to_clock(print_time + 2 * mcu.min_schedule_time())
+    self.enable_pin.update_digital_out(value=1, minclock=minclock)
+
+    # Force a delay for any subsequent commands on the command queue
+    time.sleep(0.25)
 
 class vl6180:
   IDENTIFICATION__MODEL_ID              = 0x0000
@@ -68,8 +87,14 @@ class vl6180:
     self.printer = config.get_printer()
     self.reactor = self.printer.get_reactor()
     self.name = config.get_name().split()[1]
-    self.shdn_pin = PrinterOutputPin(config)
-    self.i2c = bus.MCU_I2C_from_config(config, default_addr=0x29, default_speed=100000)
+    
+    self.i2c_default = bus.MCU_I2C_from_config(config, default_addr=0x29, default_speed=100000)
+    mcu = self.i2c_default.get_mcu()
+    self.enable_helper = EnableHelper(mcu, self.config.get('enable_pin'))
+    self.i2c_slave_address = config.getint('i2c_slave_address', None)
+    if self.i2c_slave_address:
+      self.i2c = bus.MCU_I2C_from_config(self.config, self.i2c_slave_address, default_speed=100000)
+
     self.gcode = self.printer.lookup_object('gcode')
     self.gcode.register_mux_command('MEASURE_DISTANCE', 'SENSOR', self.name,
                                     self.cmd_MEASURE_DISTANCE,
@@ -84,19 +109,18 @@ class vl6180:
                                     self.cmd_CONTINUOUS_RANGE_MEASUREMENT,
                                     desc = "Starts a continuous range measurement and returns the values for an n amount of samples")
     self.printer.register_event_handler('klippy:connect', self.handle_connect)
-
   
   def handle_connect(self):
-    self.vl6180_init() 
-    
-
-  def vl6180_init(self):
-    # Perfom reset sequence as defined by manufacturer using SHDN (gpio0) pin
-    # toolhead = self.printer.lookup_object('toolhead')
-    # toolhead.register_lookahead_callback(lambda print_time: self.shdn_pin._set_pin(print_time, 0))
-    # time.sleep(1)
-    # toolhead.register_lookahead_callback(lambda print_time: self.shdn_pin._set_pin(print_time, 1))
-    # time.sleep(1)
+    self.enable_helper.init()
+    if self.i2c_slave_address is not None:
+      register = 0x0212
+      addr = self.i2c_slave_address
+      reg_high = (register >> 8) & 0xFF
+      reg_low = register & 0xFF
+      self.i2c_default.i2c_write_noack([reg_high, reg_low, (addr & 0xFF)])
+    else:
+      self.i2c = self.i2c_default
+      self.i2c_default = None
     self.set_init_reg()
     self.set_register(0x0016, 0x00)     # Change fresh out of set satus to 0
 
@@ -148,9 +172,6 @@ class vl6180:
     # Optional public registers
     self.set_register(0x001b, 0x09)   # Set default ranging inter-measurement period to 100ms
     self.set_register(0x0014, 0x24)   # Configures interrupt on 'New Sample Ready threshold event'
-
-    # Custom register settings
-    
 
   def set_register(self, register, data):
     reg_high = (register >> 8) & 0xFF
