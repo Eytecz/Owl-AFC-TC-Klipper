@@ -247,6 +247,9 @@ class vl6180:
 
     return error_description, range_description
 
+  def get_name(self):
+        return self.name
+
   def cmd_MEASURE_DISTANCE(self, gcmd):
     self.gcode.respond_info('Measured distance: %i' % self.vl6180_single_range_measurement())
   
