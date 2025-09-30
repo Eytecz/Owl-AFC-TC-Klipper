@@ -7,7 +7,6 @@
 from . import bus
 import codecs
 import timeit
-import time
 
 class EnableHelper:
   def __init__(self, mcu, pin_desc, cmd_queue=None, value=0):
@@ -15,7 +14,8 @@ class EnableHelper:
 
   def init(self):
     mcu = self.enable_pin.get_mcu()
-    curtime = mcu.get_printer().get_reactor().monotonic()
+    reactor = mcu.get_printer().get_reactor()
+    curtime = reactor.monotonic()
     print_time = mcu.estimated_print_time(curtime)
 
     # Ensure chip is powered off
@@ -27,8 +27,9 @@ class EnableHelper:
     self.enable_pin.update_digital_out(value=1, minclock=minclock)
 
     # Force a delay for any subsequent commands on the command queue
-    time.sleep(0.25)
-
+    waketime = curtime + 3 * mcu.min_schedule_time()
+    reactor.pause(waketime)
+ 
 class vl6180:
   IDENTIFICATION__MODEL_ID              = 0x0000
   IDENTIFICATION__MODEL_REV_MAJOR       = 0x0001
@@ -246,7 +247,7 @@ class vl6180:
     range_description = interrupt_range_descriptions.get(range_value, "Unknown range event")
 
     return error_description, range_description
-
+  
   def get_name(self):
         return self.name
 
@@ -256,13 +257,13 @@ class vl6180:
   def cmd_CONTINUOUS_RANGE_MEASUREMENT(self, gcmd):
     samples = gcmd.get_int('SAMPLES', 10)
     self.set_register(self.SYSRANGE__START, 0x03)   # Start Ranging Mode Continuous
-    time.sleep(0.5)
+    self.delay(5e5)
     for _ in range(samples):
       if self.get_register(self.RESULT__INTERRUPT_STATUS_GPIO) == 0x04:
         value = self.get_register(self.RESULT__RANGE_VAL)
         self.set_register(self.SYSTEM__INTERRUPT_CLEAR, 0x07)
         self.gcode.respond_info('RESULT__RANGE_VAL: %i mm' % value)
-        time.sleep(1)
+        self.delay(1e6)
       else:
         interrupt_status = self.get_register(self.RESULT__INTERRUPT_STATUS_GPIO)
         interrupt_status_descriptions = self.interrupt_status_lookup(interrupt_status)
