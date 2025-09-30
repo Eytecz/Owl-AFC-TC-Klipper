@@ -66,34 +66,34 @@ class SpoolMotionControl:
             name = manual_stepper[1].get_steppers()[0].get_name()
             if name == self.stepper_name:
                 self.stepper = manual_stepper[1]
+                self.enable_tracking = self.config.getboolean('enable_tracking', True)
+                logging.info(f'stepper {name} connected')
         if self.stepper is None:
             raise self.config.error("Could not find stepper '%s'" % self.stepper_name)  
-        self.enable_tracking = self.config.getboolean('enable_tracking', True)
 
         # Connect vl6180 sensor
         if self.vl6180_name:
             for vl6180 in self.printer.lookup_objects('vl6180'):
-                name = vl6180.name
-                if name == vl6180_name:
+                name = vl6180[1].get_name()
+                if name == self.vl6180_name:
                     self.vl6180 = vl6180
-                    return
             if self.vl6180 is None:
-                raise self.config.error("Could not find vl6180 '%s'" % vl6180_name)
+                raise self.config.error("Could not find vl6180 '%s'" % self.vl6180_name)
             self.spool_measurement = self.config.getboolean('spool_measurement', True)
-        else:
-            pass
+            self.toolhead = self.printer.lookup_object('toolhead')
 
-        self.toolhead = self.printer.lookup_object('toolhead')
+        # Intercept stepper trapq_append and wipe_trapq function to extract motion data
         self.trapq_append_original = self.stepper.trapq_append
         self.stepper.trapq_append = self._trapq_append_intercept
-
         self.wipe_trapq_original = self.stepper.motion_queuing.wipe_trapq
         self.stepper.motion_queuing.wipe_trapq = self._wipe_trapq_intercept
    
     def cmd_SPOOL_MOTION_CONTROL(self, gcmd):
         self.enable_tracking = not self.enable_tracking
+        logging.info(f'self.enable_tracking set to {self.enable_tracking}')
     
     def _trapq_append_intercept(self, *args):
+        logging.info(f'_trapq_append_intercept with args: {args}')
         self.trapq_append_original(*args)
         self._motion_extraction(*args)
 
@@ -106,25 +106,36 @@ class SpoolMotionControl:
         runtime = args[2] + args[3] + args[4]
         move_distance = (1/2 * args[13] * (args[2]**2) + args[12] * args[3] + 1/2 * args[13] * (args[4]**2))* args[8]
         cruise_v = args[12]
-        move_dir = args[8] 
+        move_dir = args[8]
+        logging.info(f'_motion_extraction: print_time={print_time}, runtime={runtime}, move_distance={move_distance}, cruise_v={cruise_v}, move_dir={move_dir}')
 
         if self.enable_tracking:
-            if move_distance >= self.assist_threshold:
+            logging.info('tracking is True, proceeding with move motion_planning')
+            if abs(move_distance) >= self.assist_threshold:
+                logging.info(f'move_distance={move_distance} >= self.assist_threshold={self.assist_threshold}')
                 self.moved_distance = 0.
                 self._motion_planning(cruise_v, move_dir, print_time, runtime)
             else:
+                logging.info(f'self.moved_distance={self.moved_distance} += {move_distance}')
                 self.moved_distance += move_distance
+                logging.info(f'self.moved_distance={self.moved_distance}')
                 if abs(self.moved_distance) >= self.assist_threshold:
+                    logging.info(f'move_distance={move_distance} >= self.assist_threshold={self.assist_threshold}')
                     self._assist_threshold_motion_planning(self.moved_distance)
                     self.moved_distance = 0.
 
     def _motion_planning(self, cruise_v, move_dir, print_time, runtime):
-        if move_dir == 1:   # Forward motion
+        logging.info(f'_motion_planning cruise_v={cruise_v}, move_dir={move_dir}, print_time={print_time}, runtime={runtime}')
+        if move_dir == 1:
+            logging.info(f'self.assist_forward={self.assist_forward}')
             if self.assist_forward:
+                logging.info('_motion_planning assist_forward')
                 pwm_value = move_dir * self._get_scaling_factor(cruise_v)
                 self.hbridge_motor.scheduled_async_motion(pwm_value, print_time, runtime)
-        else:               # Reverse motion
+        else:
+            logging.info(f'self.assist_reverse={self.assist_reverse}')
             if self.assist_reverse:
+                logging.info('_motion_planning assist_reverse')
                 pwm_value = move_dir * self._get_scaling_factor(cruise_v)
                 self.hbridge_motor.scheduled_async_motion(pwm_value, print_time, runtime)
 
