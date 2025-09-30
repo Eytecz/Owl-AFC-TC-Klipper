@@ -18,12 +18,11 @@ class SpoolMotionControl:
         self.mcu = self.all_mcus[0]
 
         # Initial state
-        self.enable_spool_measurement = False
-        self.enable_stepper_tracking = False
-        self.tracking_state = False
-        self.tracking_pos = None
-        self.enable_forward_assist = False
-        self.enable_rewind_assist = True
+        self.spool_measurement = False
+        self.assist_forward = False
+        self.assist_reverse = True
+        self.enable_tracking = True
+        self.moved_distance = 0.
 
         # Register handlers
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
@@ -69,7 +68,7 @@ class SpoolMotionControl:
                 self.stepper = manual_stepper[1]
         if self.stepper is None:
             raise self.config.error("Could not find stepper '%s'" % self.stepper_name)  
-        self.enable_stepper_tracking = self.config.getboolean('enable_stepper_tracking', True)
+        self.enable_tracking = self.config.getboolean('enable_tracking', True)
 
         # Connect vl6180 sensor
         if self.vl6180_name:
@@ -80,7 +79,7 @@ class SpoolMotionControl:
                     return
             if self.vl6180 is None:
                 raise self.config.error("Could not find vl6180 '%s'" % vl6180_name)
-            self.enable_spool_measurement = self.config.getboolean('enable_spool_measurement', True)
+            self.spool_measurement = self.config.getboolean('spool_measurement', True)
         else:
             pass
 
@@ -92,10 +91,7 @@ class SpoolMotionControl:
         self.stepper.motion_queuing.wipe_trapq = self._wipe_trapq_intercept
    
     def cmd_SPOOL_MOTION_CONTROL(self, gcmd):
-        try:
-            self.stepper_tracking(self.reactor.monotonic())
-        except Exception as e:
-            logging.exception(f"Error in stepper_tracking: {e}")
+        self.enable_tracking = not self.enable_tracking
     
     def _trapq_append_intercept(self, *args):
         self.trapq_append_original(*args)
@@ -112,7 +108,34 @@ class SpoolMotionControl:
         cruise_v = args[12]
         move_dir = args[8] 
 
-        self.schedule_async_motion(cruise_v, move_dir, print_time, runtime)
+        if self.enable_tracking:
+            if move_distance >= self.assist_threshold:
+                self.moved_distance = 0.
+                self._motion_planning(cruise_v, move_dir, print_time, runtime)
+            else:
+                self.moved_distance += move_distance
+                if abs(self.moved_distance) >= self.assist_threshold:
+                    self._assist_threshold_motion_planning(self.moved_distance)
+                    self.moved_distance = 0.
+
+    def _motion_planning(self, cruise_v, move_dir, print_time, runtime):
+        if move_dir == 1:   # Forward motion
+            if self.assist_forward:
+                pwm_value = move_dir * self._get_scaling_factor(cruise_v)
+                self.hbridge_motor.scheduled_async_motion(pwm_value, print_time, runtime)
+        else:               # Reverse motion
+            if self.assist_reverse:
+                pwm_value = move_dir * self._get_scaling_factor(cruise_v)
+                self.hbridge_motor.scheduled_async_motion(pwm_value, print_time, runtime)
+
+    def _assist_threshold_motion_planning(self, distance):
+        pass # Calculate required pwm and scaling to perform distance move for assist motions             
+
+    def _get_scaling_factor(self, cruise_v):
+        if self.spool_measurement:
+            scaling_factor = 1.0
+            return scaling_factor
+        return 1.0
 
     def schedule_async_motion(self, cruise_v, move_dir, print_time, runtime):
         pwm_value = 1.0 * move_dir
