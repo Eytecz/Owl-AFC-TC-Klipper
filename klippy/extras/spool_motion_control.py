@@ -61,7 +61,7 @@ class SpoolMotionControl:
         else:
             raise self.config.error("Missing required 'hbridge_motor' config option")
 
-        # Connect tracked stepper
+        # Connect tracked manual_stepper
         for manual_stepper in self.printer.lookup_objects('manual_stepper'):
             name = manual_stepper[1].get_steppers()[0].get_name()
             if name == self.stepper_name:
