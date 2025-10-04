@@ -125,7 +125,7 @@ class vl6180:
       self.i2c_default = None
     self.set_init_reg()
     self.set_register(0x0016, 0x00)     # Change fresh out of set satus to 0
-    logging.info(f'successfully connected {self.name} on address {self.i2c.get_i2c_address()}')
+    logging.info(f'successfully connected VL6180 {self.name} on address {self.i2c.get_i2c_address()}')
 
   def cmd_SET_VL_INIT_REG(self, gcmd):
     self.set_init_reg()
